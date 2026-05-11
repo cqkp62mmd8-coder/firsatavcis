@@ -1,160 +1,92 @@
 import os
-import json
-import time
-import hashlib
-import requests
-from datetime import datetime
+import asyncio
+import re
+from telethon import TelegramClient, events
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID")
+# --- AYARLAR (Railway'de Variable olarak ekleyin) ---
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+API_ID = int(os.environ.get("API_ID", "0"))
+API_HASH = os.environ.get("API_HASH", "")
+HEDEF_KANAL = os.environ.get("CHANNEL_ID", "")
 MIN_INDIRIM = int(os.environ.get("MIN_INDIRIM", "50"))
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "1800"))
 
-GORULMUS_FILE = "gorulmus.json"
+# Takip edilecek kaynak kanallar
+KAYNAK_KANALLAR = [
+    "@amazonsicakfirsatlar",
+    "@donanimhabersicakfirsatlar",
+    "@firsatmerkez",
+    "@yurticifirsat",
+    "@indirimhabercisi",
+    "@firsatavcilari01",
+    "@uygunlasohbet",
+    "@indirimdeal",
+    "@firsatmerkezi",
+]
 
-def gorulmus_yukle():
-    if os.path.exists(GORULMUS_FILE):
-        with open(GORULMUS_FILE, "r") as f:
-            return json.load(f)
-    return []
+# Telethon client (kullanici hesabi ile dinleme)
+client = TelegramClient("indirim_session", API_ID, API_HASH)
 
-def gorulmus_kaydet(liste):
-    with open(GORULMUS_FILE, "w") as f:
-        json.dump(liste[-500:], f)
+def indirim_oranini_bul(metin):
+    if not metin:
+        return 0
+    # %85, %85 gibi kaliplari bul
+    eslesme = re.findall(r"%\s*(\d+)", metin)
+    if eslesme:
+        return max(int(x) for x in eslesme)
+    # "85%" formatini da dene
+    eslesme2 = re.findall(r"(\d+)\s*%", metin)
+    if eslesme2:
+        return max(int(x) for x in eslesme2)
+    return 0
 
-def urun_id(urun):
-    return hashlib.md5(urun["url"].encode()).hexdigest()
-
-def telegram_gonder(mesaj):
-    url = "https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendMessage"
-    data = {
-        "chat_id": CHANNEL_ID,
-        "text": mesaj,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False
-    }
-    try:
-        r = requests.post(url, data=data, timeout=10)
-        return r.status_code == 200
-    except Exception as e:
-        print("Telegram hatasi: " + str(e))
+def anahtar_kelime_var_mi(metin):
+    if not metin:
         return False
+    metin_kucuk = metin.lower()
+    anahtar = ["indirim", "firsat", "tl", "kampanya", "ucuz", "sale", "%"]
+    return any(k in metin_kucuk for k in anahtar)
 
-def indirim_mesaji_olustur(urun):
-    magaza_emoji = {
-        "trendyol": "Trendyol",
-        "amazon": "Amazon TR",
-        "hepsiburada": "Hepsiburada"
-    }
-    magaza_adi = magaza_emoji.get(urun["magaza"].lower(), urun["magaza"])
-    simdi = datetime.now().strftime("%H:%M")
-    mesaj = (
-        "%" + str(urun["indirim_yuzdesi"]) + " INDIRIM!\n\n"
-        + urun["isim"] + "\n\n"
-        "Eski: " + str(urun["eski_fiyat"]) + " TL\n"
-        "Yeni: " + str(urun["yeni_fiyat"]) + " TL\n"
-        "Magaza: " + magaza_adi + "\n"
-        "Saat: " + simdi + "\n\n"
-        + urun["url"] + "\n\n"
-        "Stok sinirli olabilir!"
-    )
-    return mesaj
-
-def trendyol_tara():
-    urunler = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
-    }
-    url = "https://public.trendyol.com/discovery-web-productgw-service/api/campaign-products?campaignId=flash-sale&storefrontId=1&culture=tr-TR"
+@client.on(events.NewMessage(chats=KAYNAK_KANALLAR))
+async def mesaj_geldi(event):
     try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code == 200:
-            data = r.json()
-            products = data.get("result", {}).get("products", [])
-            for p in products:
-                try:
-                    eski = p.get("originalPrice", {}).get("value", 0)
-                    yeni = p.get("price", {}).get("value", 0)
-                    if eski and yeni and eski > yeni:
-                        indirim = round((1 - yeni / eski) * 100)
-                        if indirim >= MIN_INDIRIM:
-                            urunler.append({
-                                "isim": p.get("name", "")[:60],
-                                "eski_fiyat": eski,
-                                "yeni_fiyat": yeni,
-                                "indirim_yuzdesi": indirim,
-                                "url": "https://www.trendyol.com" + p.get("url", ""),
-                                "magaza": "trendyol"
-                            })
-                except:
-                    continue
-    except Exception as e:
-        print("Trendyol hatasi: " + str(e))
-    return urunler
+        metin = event.message.text or ""
+        indirim = indirim_oranini_bul(metin)
 
-def hepsiburada_tara():
-    urunler = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
-    }
-    url = "https://www.hepsiburada.com/api/sf/search?q=&groupSeller=true&itemsPerPage=48&offset=0&sort=discountRatioAsc"
-    try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code == 200:
-            data = r.json()
-            products = data.get("products", [])
-            for p in products:
-                try:
-                    eski = p.get("originalPrice", 0)
-                    yeni = p.get("finalPrice", 0)
-                    if eski and yeni and eski > yeni:
-                        indirim = round((1 - yeni / eski) * 100)
-                        if indirim >= MIN_INDIRIM:
-                            urunler.append({
-                                "isim": p.get("name", "")[:60],
-                                "eski_fiyat": round(eski, 2),
-                                "yeni_fiyat": round(yeni, 2),
-                                "indirim_yuzdesi": indirim,
-                                "url": "https://www.hepsiburada.com" + p.get("url", ""),
-                                "magaza": "hepsiburada"
-                            })
-                except:
-                    continue
-    except Exception as e:
-        print("Hepsiburada hatasi: " + str(e))
-    return urunler
+        # Indirim orani yeterliyse veya anahtar kelime varsa ilet
+        if indirim >= MIN_INDIRIM or (indirim == 0 and anahtar_kelime_var_mi(metin)):
+            # Kaynagi belirt
+            kaynak = ""
+            if event.chat and hasattr(event.chat, "username") and event.chat.username:
+                kaynak = "\n\nKaynak: @" + event.chat.username
 
-def tara():
-    print("[" + datetime.now().strftime("%H:%M:%S") + "] Tarama basliyor...")
-    gorulmus = gorulmus_yukle()
-    tum_urunler = []
-    tum_urunler += trendyol_tara()
-    tum_urunler += hepsiburada_tara()
-    yeni_urunler = []
-    for u in tum_urunler:
-        uid = urun_id(u)
-        if uid not in gorulmus:
-            yeni_urunler.append(u)
-            gorulmus.append(uid)
-    gorulmus_kaydet(gorulmus)
-    yeni_urunler.sort(key=lambda x: x["indirim_yuzdesi"], reverse=True)
-    print("  -> " + str(len(tum_urunler)) + " urun bulundu, " + str(len(yeni_urunler)) + " yeni")
-    for urun in yeni_urunler[:10]:
-        mesaj = indirim_mesaji_olustur(urun)
-        if telegram_gonder(mesaj):
-            print("  Gonderildi: " + urun["isim"][:40])
-            time.sleep(3)
+            if event.message.media:
+                # Medya varsa medyayi da ilet
+                await client.send_message(
+                    HEDEF_KANAL,
+                    metin + kaynak,
+                    file=event.message.media,
+                    parse_mode="html"
+                )
+            else:
+                await client.send_message(
+                    HEDEF_KANAL,
+                    metin + kaynak,
+                    parse_mode="html"
+                )
+
+            print("Iletildi: " + metin[:60])
+
+    except Exception as e:
+        print("Hata: " + str(e))
+
+async def main():
+    print("Forward Botu Baslatiliyor...")
+    print("Min indirim: %" + str(MIN_INDIRIM))
+    print("Kaynak kanallar: " + str(KAYNAK_KANALLAR))
+
+    await client.start(bot_token=BOT_TOKEN)
+    print("Bot aktif! Mesajlar bekleniyor...")
+    await client.run_until_disconnected()
 
 if __name__ == "__main__":
-    print("Indirim Botu Baslatildi")
-    print("Min. indirim: %" + str(MIN_INDIRIM))
-    print("Kontrol araligi: " + str(CHECK_INTERVAL) + " saniye")
-    while True:
-        try:
-            tara()
-        except Exception as e:
-            print("Hata: " + str(e))
-        print("  " + str(CHECK_INTERVAL // 60) + " dakika bekleniyor...")
-        time.sleep(CHECK_INTERVAL)
+    asyncio.run(main())
