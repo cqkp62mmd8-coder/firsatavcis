@@ -52,12 +52,25 @@ def mesaj_id_olustur(metin):
 def indirim_oranini_bul(metin):
     if not metin:
         return 0
-    eslesme = re.findall(r"%\s*(\d+)", metin)
-    if eslesme:
-        return max(int(x) for x in eslesme)
-    eslesme2 = re.findall(r"(\d+)\s*%", metin)
-    if eslesme2:
-        return max(int(x) for x in eslesme2)
+    # "X indirim" veya "indirim X" kaliplarini ara
+    indirim_kaliplari = [
+        r"%\s*(\d+)\s*(?:indirim|off|discount)",
+        r"(\d+)\s*%\s*(?:indirim|off|discount)",
+        r"(?:indirim|off|discount)[^\d]*(\d+)\s*%",
+    ]
+    for kalip in indirim_kaliplari:
+        eslesme = re.findall(kalip, metin.lower())
+        if eslesme:
+            degerler = [int(x) for x in eslesme if 1 <= int(x) <= 99]
+            if degerler:
+                return max(degerler)
+    # Genel % kalip - ama 1-99 arasi ve "indirim" kelimesi yakin olmali
+    if "indirim" in metin.lower() or "kampanya" in metin.lower() or "firsat" in metin.lower():
+        eslesme = re.findall(r"%(\d+)", metin)
+        eslesme += re.findall(r"(\d+)%", metin)
+        degerler = [int(x) for x in eslesme if 1 <= int(x) <= 99]
+        if degerler:
+            return max(degerler)
     return 0
 
 def fiyat_bul(metin):
