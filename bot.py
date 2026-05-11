@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from PIL import Image
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError, ChannelPrivateError, ChatWriteForbiddenError
+from telethon.errors import FloodWaitError, ChannelPrivateError, ChatWriteForbiddenError, UsernameInvalidError
 from telethon.tl.types import MessageMediaPhoto
 
 # ═══════════════════════════════════════════════════════════════
@@ -26,51 +26,18 @@ MIN_INDIRIM    = int(os.environ.get("MIN_INDIRIM", "50"))
 # KAYNAK KANALLAR (30 kanal - kategorize edilmis)
 # ═══════════════════════════════════════════════════════════════
 KAYNAK_KANALLAR = [
-    # === BUYUK & AKTIF KANALLAR ===
-    "@amazonsicakfirsatlar",        # Amazon TR - en buyuk
+    # === KESIN AKTIF KANALLAR ===
+    "@amazonsicakfirsatlar",        # Amazon TR sicak firsatlar
     "@donanimhabersicakfirsatlar",  # DH Sicak Firsatlar - teknoloji
-    "@yurticifirsat",               # Yurtici Firsatlari - karma
-    "@firsatmerkez",                # Trendyol odakli
+    "@yurticifirsat",               # Yurtici Firsatlari
+    "@firsatmerkez",                # Firsat Merkezi
     "@indirimhabercisi",            # Indirim kuponu + link
-    "@firsatpaylasim",              # Turkiye en populer kanallarindan
-    "@firsatrobotu",                # Otomatik bot - yuksek hacim
-    "@teknofirsat",                 # Teknoloji odakli
-    "@firsatizm",                   # Firsatizm - indirim habercisi
-
-    # === KARMA KATEGORILER ===
-    "@uygunlasohbet",               # Uygunla - karma
-    "@indirimdeal",                 # Indirim Deal
-    "@firsatmerkezi",               # Firsat Merkezi
+    "@firsatpaylasim",              # En populer kanallardan
+    "@uygunlasohbet",               # Uygunla
     "@firsatavcilari01",            # Firsat Avcilari
     "@firsatvakti",                 # Firsat Vakti
-    "@Firsaturun00",                # Firsat Urun
-    "@firsatyurdu",                 # Firsat Yurdu - gece gunduz tarama
-    "@firsattayfa",                 # Firsat Tayfa
-    "@firsatdiyari",                # Firsat Diyari
-    "@indirimler",                  # Genel indirimler
-
-    # === AMAZON ODAKLI ===
-    "@amazonfirsat",                # Amazon Firsat - anlik indirim
-    "@amazonindirimleri",           # Amazon Indirimleri - ozel firsatlar
-
-    # === TRENDYOL ODAKLI ===
-    "@trendyolavcisi",              # Trendyol Avcisi
-    "@trendyolindirimleri",         # Trendyol indirimleri
-
-    # === HEPSIBURADA ODAKLI ===
-    "@hepsiburadafirsatlari",       # Hepsiburada firsatlari
-
-    # === YURTDISI ===
-    "@yurtdisifirsat",              # Amazon EU + AliExpress
-    "@firsatdolu",                  # Firsatdolu yurtdisi
-
-    # === TEKNOLOJI / ELEKTRONIK ===
-    "@sicakfirsatlar",              # Sicak Firsatlar - teknoloji agirlikli
-    "@bilgisayarindirimleri",       # Bilgisayar indirimleri
-
-    # === MARKET / AKTUEL ===
-    "@marketindirimleri",           # BIM A101 SOK aktuel
-    "@biriindirimmidedi",           # Biri Indirim mi Dedi
+    "@firsatyurdu",                 # Firsat Yurdu
+    "@yurtdisifirsat",              # Yurtdisi firsatlar
 ]
 
 # ═══════════════════════════════════════════════════════════════
@@ -477,6 +444,8 @@ async def mesaj_geldi(event):
         await asyncio.sleep(e.seconds + 5)
     except ChannelPrivateError:
         log("HATA", "Kanal ozel/kapali - listeden kaldirin")
+    except UsernameInvalidError as e:
+        log("HATA", "Gecersiz kullanici adi - kanal bulunamadi: " + str(e))
     except ChatWriteForbiddenError:
         log("KRITIK", "Hedef kanala yazma izni yok!")
         await admin_bildir("🚨 Hedef kanala yazma izni yok! Botu admin yapın.")
