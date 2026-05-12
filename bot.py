@@ -30,7 +30,7 @@ KAYNAK_KANALLAR = [
 
 GORULMUS_FILE    = "gorulmus.json"
 ISTATISTIK_FILE  = "istatistik.json"
-LOGO_DOSYA       = "logo.png"
+LOGO_DOSYA       = "logo.PNG"
 MESAJ_BEKLEME    = 3          
 GORULMUS_TTL     = 7 * 86400  
 GORULMUS_MAX     = 5000       
