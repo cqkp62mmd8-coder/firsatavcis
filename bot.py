@@ -42,7 +42,7 @@ KAYNAK_KANALLAR = [
 GORULMUS_FILE   = "gorulmus.json"
 ISTATISTIK_FILE = "istatistik.json"
 GUNUN_URUNLERI_FILE = "gunun_urunleri.json"
-LOGO_DOSYA      = "logo.PNG"
+LOGO_DOSYA      = "logo.png"
 MESAJ_BEKLEME   = 3
 GORULMUS_MAX    = 3000
 GORULMUS_TTL    = 7 * 24 * 3600
@@ -459,17 +459,49 @@ def yildiz_goster(indirim):
     else:
         return "⭐⭐"
 
+def kupon_bul(metin):
+    if not metin:
+        return None
+    kaliplar = [
+        r"kupon\s*[:\-]?\s*([A-Z0-9]{4,20})",
+        r"kod\s*[:\-]?\s*([A-Z0-9]{4,20})",
+        r"coupon\s*[:\-]?\s*([A-Z0-9]{4,20})",
+        r"indirim\s*kodu?\s*[:\-]?\s*([A-Z0-9]{4,20})",
+    ]
+    for kalip in kaliplar:
+        eslesme = re.findall(kalip, metin, re.IGNORECASE)
+        if eslesme:
+            return eslesme[0].upper()
+    return None
+
+def minimum_siparis_bul(metin):
+    if not metin:
+        return None
+    kaliplar = [
+        r"(\d+)\s*adet\s*al[ıi]mda",
+        r"min(?:imum)?\s*(\d+)\s*(?:tl|adet)",
+        r"(\d+)\s*tl\s*(?:ve\s*)?(?:uzeri|ustu|alimda)",
+        r"(\d[\d.,]*)\s*tl\s*alışverişte",
+    ]
+    for kalip in kaliplar:
+        eslesme = re.findall(kalip, metin, re.IGNORECASE)
+        if eslesme:
+            return eslesme[0]
+    return None
+
 def sablon_olustur(metin, indirim, buton_linkleri=None):
     if indirim <= 0:
         return None, None
 
-    magaza = magaza_bul(metin)
-    urun   = urun_adi_bul(metin)
+    magaza       = magaza_bul(metin)
+    urun         = urun_adi_bul(metin)
     eski_str, yeni_str, eski_val, yeni_val = fiyat_bul(metin)
-    link   = link_bul(metin, buton_linkleri)
-    stok_kritik = stok_durumu_bul(metin)
+    link         = link_bul(metin, buton_linkleri)
+    stok_kritik  = stok_durumu_bul(metin)
     indirim_turu = indirim_turu_bul(metin, urun)
     kat_adi, kat_ikon, kat_hashtagler = kategori_bul(metin)
+    kupon        = kupon_bul(metin)
+    min_siparis  = minimum_siparis_bul(metin)
 
     magaza_emoji = {
         "Trendyol":    "🛍️",
@@ -486,9 +518,8 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
         "E-Ticaret":   "🛒",
     }
     m_emoji = magaza_emoji.get(magaza, "🛒")
-
-    yildiz = yildiz_goster(indirim)
-    zaman  = datetime.now().strftime("%d %b, %H:%M")
+    yildiz  = yildiz_goster(indirim)
+    zaman   = datetime.now().strftime("%H:%M")
     kat_yazi = {
         "elektronik": "Elektronik",
         "giyim":      "Giyim & Moda",
@@ -501,53 +532,67 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
         "kitap":      "Kitap & Kırtasiye",
         "genel":      "Alışveriş",
     }.get(kat_adi, "Alışveriş")
+    kanal = HEDEF_KANAL.lstrip("@")
+    hashtagler = hashtag_olustur(kat_hashtagler, magaza)
 
     s = []
 
-    # Baslik
     if indirim_turu == "marka":
-        s.append("🏷️ <b>MARKA İNDİRİMİ  %" + str(indirim) + " İNDİRİM!</b>  " + yildiz)
+        # ════════════════════════════════
+        # MARKA İNDİRİMİ ŞABLONU
+        # ════════════════════════════════
+        s.append("┌─────────────────────┐")
+        s.append("│ 🏷️ <b>MARKA İNDİRİMİ  %" + str(indirim) + "</b>   │")
+        s.append("└─────────────────────┘")
+        s.append("")
+        s.append(m_emoji + " <b>" + magaza + "</b>  •  " + kat_ikon + " " + kat_yazi)
+        s.append("")
+        s.append("Seçili ürünlerde <b>%" + str(indirim) + "'ye varan</b> indirim")
+        s.append("")
+        if kupon:
+            s.append("🎟️ Kupon: <code>" + kupon + "</code>")
+        if min_siparis:
+            s.append("🛒 Min. " + min_siparis + " alışverişte geçerli")
+        if kupon or min_siparis:
+            s.append("")
+        s.append("⏰ Sınırlı süre!  •  🕐 " + zaman)
     else:
-        s.append("🔥 <b>%" + str(indirim) + " İNDİRİM!</b>  " + yildiz)
-
-    s.append("")
-
-    # Kategori + urun
-    s.append(kat_ikon + " <b>" + kat_yazi + "</b>")
-    if urun:
-        s.append("🏷️ " + urun)
-    s.append("")
-
-    # Magaza
-    s.append(m_emoji + " <b>" + magaza + "</b>")
-    s.append("")
-
-    # Fiyat
-    if eski_str and yeni_str:
-        s.append("💰 <s>" + eski_str + " TL</s>  →  <b>" + yeni_str + " TL</b>")
+        # ════════════════════════════════
+        # ÜRÜN İNDİRİMİ ŞABLONU
+        # ════════════════════════════════
+        s.append("┌─────────────────────┐")
+        s.append("│ 🔥 <b>%" + str(indirim) + " İNDİRİM</b>  " + yildiz + "   │")
+        s.append("└─────────────────────┘")
         s.append("")
-
-    # Stok uyarisi
-    if stok_kritik:
-        s.append("⚠️ <b>STOKLAR ERİYOR — Hemen yakala!</b>")
+        if urun:
+            s.append("📌 <b>" + urun + "</b>")
+            s.append("")
+        if eski_str and yeni_str:
+            s.append("💰 <s>" + eski_str + " TL</s>  →  <b>" + yeni_str + " TL</b>")
+        elif yeni_str:
+            s.append("💰 <b>" + yeni_str + " TL</b>")
         s.append("")
+        s.append(m_emoji + " <b>" + magaza + "</b>  •  " + kat_ikon + " " + kat_yazi)
+        if stok_kritik:
+            s.append("⚠️ <b>Son stoklar!</b>  •  🕐 " + zaman)
+        else:
+            s.append("🕐 " + zaman)
+        if kupon:
+            s.append("")
+            s.append("🎟️ Kupon: <code>" + kupon + "</code>")
+        if min_siparis:
+            s.append("🛒 " + min_siparis + " adet / " + min_siparis + " TL alımda geçerli")
 
-    # Zaman + kanal
-    kanal = HEDEF_KANAL.lstrip("@")
-    s.append("🕐 " + zaman + "  •  📢 @" + kanal)
     s.append("")
-
-    # Hashtagler
-    hashtagler = hashtag_olustur(kat_hashtagler, magaza)
+    s.append("──────────────────────")
     s.append(hashtagler)
+    s.append("📢 @" + kanal)
 
-    # Link
     if link:
         s.append("")
         s.append("🔗 <a href='" + link + "'>Fırsata Git</a>")
 
-    metin_sablon = "\n".join(s)
-    return metin_sablon, None
+    return "\n".join(s), None
 
 
 # ═══════════════════════════════════════════════════════════════
