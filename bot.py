@@ -18,6 +18,7 @@ from telethon.tl.types import ReactionEmoji
 # AYARLAR
 # ═══════════════════════════════════════════════════════════════
 API_ID         = int(os.environ.get("API_ID", "0"))
+BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")  # Inline buton icin ayri bot token
 API_HASH       = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 HEDEF_KANAL    = os.environ.get("CHANNEL_ID", "")
@@ -41,7 +42,7 @@ KAYNAK_KANALLAR = [
 GORULMUS_FILE   = "gorulmus.json"
 ISTATISTIK_FILE = "istatistik.json"
 GUNUN_URUNLERI_FILE = "gunun_urunleri.json"
-LOGO_DOSYA      = "logo.PNG"
+LOGO_DOSYA      = "logo.png"
 MESAJ_BEKLEME   = 3
 GORULMUS_MAX    = 3000
 GORULMUS_TTL    = 7 * 24 * 3600
@@ -138,6 +139,10 @@ son_mesaj_zamani  = 0.0
 gunun_urunleri    = []  # Gun icinde yakalanan en iyi urunler
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+
+# Inline buton gondermek icin ayri bot client
+import telethon
+bot_client = None
 
 # ═══════════════════════════════════════════════════════════════
 # LOGLAMA
@@ -241,6 +246,18 @@ def emoji_temizle(metin):
         if kat not in ("So", "Sm", "Sk"):
             temiz += k
     return temiz.strip()
+
+
+def markdown_temizle(metin):
+    if not metin:
+        return metin
+    metin = re.sub(r'[*]{1,3}([^*]+)[*]{1,3}', r'\1', metin)
+    metin = re.sub(r'[_]{1,2}([^_]+)[_]{1,2}', r'\1', metin)
+    metin = re.sub(r'[`]([^`]+)[`]', r'\1', metin)
+    metin = re.sub(r'[~]{1,2}([^~]+)[~]{1,2}', r'\1', metin)
+    metin = re.sub(r'[|]{2}([^|]+)[|]{2}', r'\1', metin)
+    return metin
+
 
 def mesaj_id_olustur(metin):
     temiz = re.sub(r'\s+', ' ', (metin or "").strip().lower())
@@ -394,11 +411,27 @@ def logo_ekle(gorsel_bytes):
             return gorsel_bytes
         urun_img = Image.open(BytesIO(gorsel_bytes)).convert("RGBA")
         w, h = urun_img.size
-        logo = Image.open(LOGO_DOSYA).convert("RGBA")
-        boyut = int(min(w, h) * 0.20)
-        logo = logo.resize((boyut, boyut), Image.LANCZOS)
-        bosluk = 10
-        urun_img.paste(logo, (w - boyut - bosluk, h - boyut - bosluk), logo)
+
+        logo_ham = Image.open(LOGO_DOSYA).convert("RGBA")
+        logo_w, logo_h = logo_ham.size
+
+        # Hedef genislik: gorselin %18'i, en az 60px en fazla 160px
+        hedef_genislik = max(60, min(160, int(w * 0.18)))
+        # Orani koru
+        oran = logo_h / logo_w
+        hedef_yukseklik = int(hedef_genislik * oran)
+
+        logo = logo_ham.resize((hedef_genislik, hedef_yukseklik), Image.LANCZOS)
+
+        bosluk = 12
+        x = w - hedef_genislik - bosluk
+        y = h - hedef_yukseklik - bosluk
+
+        # Sinir disina tasmamasi icin kontrol
+        x = max(0, x)
+        y = max(0, y)
+
+        urun_img.paste(logo, (x, y), logo)
         cikti = BytesIO()
         urun_img.convert("RGB").save(cikti, format="JPEG", quality=92)
         cikti.seek(0)
@@ -414,6 +447,17 @@ def hashtag_olustur(kategori_hashtagler, magaza):
         hashtagler.append(magaza_tag)
     hashtagler.append("#FırsatPulsu")
     return " ".join(hashtagler)
+
+
+def yildiz_goster(indirim):
+    if indirim >= 80:
+        return "⭐⭐⭐⭐⭐"
+    elif indirim >= 70:
+        return "⭐⭐⭐⭐"
+    elif indirim >= 60:
+        return "⭐⭐⭐"
+    else:
+        return "⭐⭐"
 
 def sablon_olustur(metin, indirim, buton_linkleri=None):
     if indirim <= 0:
@@ -443,20 +487,36 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
     }
     m_emoji = magaza_emoji.get(magaza, "🛒")
 
+    yildiz = yildiz_goster(indirim)
+    zaman  = datetime.now().strftime("%d %b, %H:%M")
+    kat_yazi = {
+        "elektronik": "Elektronik",
+        "giyim":      "Giyim & Moda",
+        "kozmetik":   "Kozmetik",
+        "ev":         "Ev & Yaşam",
+        "market":     "Market",
+        "spor":       "Spor",
+        "oyun":       "Oyun & Gaming",
+        "bebek":      "Bebek & Çocuk",
+        "kitap":      "Kitap & Kırtasiye",
+        "genel":      "Alışveriş",
+    }.get(kat_adi, "Alışveriş")
+
     s = []
 
-    # Baslik - indirim turune gore
+    # Baslik
     if indirim_turu == "marka":
-        s.append("🏷️ <b>MARKA İNDİRİMİ — %" + str(indirim) + " İNDİRİM!</b>")
+        s.append("🏷️ <b>MARKA İNDİRİMİ  %" + str(indirim) + " İNDİRİM!</b>  " + yildiz)
     else:
-        s.append("🔥 <b>%" + str(indirim) + " İNDİRİM!</b>")
+        s.append("🔥 <b>%" + str(indirim) + " İNDİRİM!</b>  " + yildiz)
 
     s.append("")
 
     # Kategori + urun
+    s.append(kat_ikon + " <b>" + kat_yazi + "</b>")
     if urun:
-        s.append(kat_ikon + " " + urun)
-        s.append("")
+        s.append("🏷️ " + urun)
+    s.append("")
 
     # Magaza
     s.append(m_emoji + " <b>" + magaza + "</b>")
@@ -472,18 +532,31 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
         s.append("⚠️ <b>STOKLAR ERİYOR — Hemen yakala!</b>")
         s.append("")
 
+    # Zaman + kanal
+    kanal = HEDEF_KANAL.lstrip("@")
+    s.append("🕐 " + zaman + "  •  📢 @" + kanal)
+    s.append("")
+
     # Hashtagler
     hashtagler = hashtag_olustur(kat_hashtagler, magaza)
     s.append(hashtagler)
-    s.append("")
 
-    kanal = HEDEF_KANAL.lstrip("@")
-    s.append("📢 @" + kanal)
+    # Link
+    if link:
+        s.append("")
+        s.append("🔗 <a href='" + link + "'>Fırsata Git</a>")
 
     metin_sablon = "\n".join(s)
+    return metin_sablon, None
 
-    # Buton olustur (link varsa)
-    buton = None
+
+# ═══════════════════════════════════════════════════════════════
+# MESAJ GONDERME - Bot token varsa inline buton destekli
+# ═══════════════════════════════════════════════════════════════
+async def mesaj_gonder(metin, link=None, gorsel=None):
+    """Bot token varsa inline butonlu gonderir, yoksa linki metne ekler"""
+    global bot_client
+
     if link:
         from telethon.tl.types import KeyboardButtonUrl, KeyboardButtonRow, ReplyInlineMarkup
         buton = ReplyInlineMarkup(rows=[
@@ -491,8 +564,37 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
                 KeyboardButtonUrl(text="🔗 Fırsata Git", url=link)
             ])
         ])
+    else:
+        buton = None
 
-    return metin_sablon, buton
+    # Bot client ile gonder (inline buton destekli)
+    if bot_client and link:
+        try:
+            if gorsel:
+                msg = await bot_client.send_message(
+                    HEDEF_KANAL, metin,
+                    parse_mode="html",
+                    file=gorsel,
+                    buttons=buton
+                )
+            else:
+                msg = await bot_client.send_message(
+                    HEDEF_KANAL, metin,
+                    parse_mode="html",
+                    buttons=buton
+                )
+            return msg
+        except Exception as e:
+            log("UYARI", "Bot ile gonderilemedi, userbot deneniyor: " + str(e))
+
+    # Userbot ile gonder (inline buton yok, linki metne ekle)
+    if link:
+        metin = metin + "\n\n🔗 <a href='" + link + "'>Fırsata Git</a>"
+    if gorsel:
+        msg = await client.send_message(HEDEF_KANAL, metin, parse_mode="html", file=gorsel)
+    else:
+        msg = await client.send_message(HEDEF_KANAL, metin, parse_mode="html")
+    return msg
 
 # ═══════════════════════════════════════════════════════════════
 # GUNUN EN IYI 3 URUNU - her gun 21:00
@@ -552,19 +654,13 @@ async def gunun_en_iyilerini_gonder():
 
         metin_sablon = "\n".join(s)
 
-        buton = None
         if urun["link"]:
-            buton = ReplyInlineMarkup(rows=[
-                KeyboardButtonRow(buttons=[
-                    KeyboardButtonUrl(text="🔗 Fırsata Git", url=urun["link"])
-                ])
-            ])
+            metin_sablon += "\n\n🔗 <a href='" + urun["link"] + "'>Fırsata Git</a>"
 
         try:
             msg = await client.send_message(
                 HEDEF_KANAL, metin_sablon,
-                parse_mode="html",
-                buttons=buton
+                parse_mode="html"
             )
             await tepki_ekle(msg)
             await asyncio.sleep(3)
@@ -634,19 +730,13 @@ async def surpriz_firsat_gonder():
 
     metin_sablon = "\n".join(s)
 
-    buton = None
     if urun["link"]:
-        buton = ReplyInlineMarkup(rows=[
-            KeyboardButtonRow(buttons=[
-                KeyboardButtonUrl(text="🎰 Sürprize Git", url=urun["link"])
-            ])
-        ])
+        metin_sablon += "\n\n🔗 <a href='" + urun["link"] + "'>Sürprize Git</a>"
 
     try:
         msg = await client.send_message(
             HEDEF_KANAL, metin_sablon,
-            parse_mode="html",
-            buttons=buton
+            parse_mode="html"
         )
         await tepki_ekle(msg)
         log("OK", "Surpriz firsat gonderildi: " + urun["urun"][:40])
@@ -721,7 +811,7 @@ async def watchdog():
 async def mesaj_geldi(event):
     global son_mesaj_zamani
     try:
-        metin = event.message.text or ""
+        metin = markdown_temizle(event.message.text or "")
         indirim = indirim_oranini_bul(metin)
         if indirim < MIN_INDIRIM:
             return
@@ -773,14 +863,12 @@ async def mesaj_geldi(event):
                     msg = await client.send_message(
                         HEDEF_KANAL, sablon,
                         file=buf,
-                        parse_mode="html",
-                        buttons=inline_buton
+                        parse_mode="html"
                     )
                 else:
                     msg = await client.send_message(
                         HEDEF_KANAL, sablon,
-                        parse_mode="html",
-                        buttons=inline_buton
+                        parse_mode="html"
                     )
             except Exception as img_e:
                 log("UYARI", "Gorsel hatasi: " + str(img_e))
@@ -867,6 +955,19 @@ async def main():
         try:
             await client.start()
             log("OK", "Baglandi! Kanallar dinleniyor...")
+
+            # Bot token varsa bot client'i da baslat
+            global bot_client
+            if BOT_TOKEN:
+                try:
+                    bot_client = TelegramClient("bot_session", API_ID, API_HASH)
+                    await bot_client.start(bot_token=BOT_TOKEN)
+                    log("OK", "Bot client baglandi - inline butonlar aktif!")
+                except Exception as e:
+                    log("UYARI", "Bot client baslanamadi: " + str(e))
+                    bot_client = None
+            else:
+                log("BILGI", "BOT_TOKEN yok - linkler metin olarak eklenecek")
             await baslangic_raporu()
 
             if os.environ.get("TEST_MODE", "0") == "1":
