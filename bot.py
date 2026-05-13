@@ -568,9 +568,10 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
             s.append("📌 <b>" + urun + "</b>")
             s.append("")
         if eski_str and yeni_str:
-            s.append("💰 <s>" + eski_str + " TL</s>  →  <b>" + yeni_str + " TL</b>")
+            s.append("🏷️ Normal Fiyat:    <s>" + eski_str + " TL</s>")
+            s.append("💰 İndirimli Fiyat: <b>" + yeni_str + " TL</b>")
         elif yeni_str:
-            s.append("💰 <b>" + yeni_str + " TL</b>")
+            s.append("💰 Fiyat: <b>" + yeni_str + " TL</b>")
         s.append("")
         s.append(m_emoji + " <b>" + magaza + "</b>  •  " + kat_ikon + " " + kat_yazi)
         if stok_kritik:
