@@ -266,6 +266,9 @@ def mesaj_id_olustur(metin):
 def indirim_oranini_bul(metin):
     if not metin:
         return 0
+    metin_lower = metin.lower()
+
+    # 1. Standart % kaliplari
     kaliplar = [
         r"-\s*%\s*(\d+)",
         r"indirim\s*:\s*-?\s*%\s*(\d+)",
@@ -276,16 +279,43 @@ def indirim_oranini_bul(metin):
         r"(\d+)\s*percent",
     ]
     for kalip in kaliplar:
-        eslesme = re.findall(kalip, metin.lower())
+        eslesme = re.findall(kalip, metin_lower)
         if eslesme:
             degerler = [int(x) for x in eslesme if 1 <= int(x) <= 99]
             if degerler:
                 return max(degerler)
-    if any(k in metin.lower() for k in ["indirim", "kampanya", "firsat", "sale", "off"]):
+
+    # 2. "X al Y öde" kampanyasi - indirim hesapla
+    # Ornek: "4 al 3 öde" -> %25, "3 al 2 öde" -> %33
+    al_ode = re.findall(r"(\d+)\s*al\s*(\d+)\s*(?:öde|ode)", metin_lower)
+    if al_ode:
+        al, ode = int(al_ode[0][0]), int(al_ode[0][1])
+        if al > ode > 0:
+            indirim = round((1 - ode / al) * 100)
+            if 1 <= indirim <= 99:
+                return indirim
+
+    # 3. "Sepete X adet ekle indirim" - sabit %25 varsay
+    if re.search(r"sepete\s*\d+\s*adet", metin_lower):
+        if any(k in metin_lower for k in ["indirim", "kampanya", "öde", "ode"]):
+            return 25  # Bilinmeyen kampanya - minimum goster
+
+    # 4. Genel anahtar kelime + % arama
+    if any(k in metin_lower for k in ["indirim", "kampanya", "firsat", "sale", "off"]):
         eslesme = re.findall(r"%(\d+)", metin) + re.findall(r"(\d+)%", metin)
         degerler = [int(x) for x in eslesme if 1 <= int(x) <= 99]
         if degerler:
             return max(degerler)
+
+    # 5. Stok eriyor + fiyat varsa - ozel firsat olarak isle (MIN_INDIRIM'i atla)
+    stok_sinyali = any(k in metin_lower for k in [
+        "stoklar eriyor", "son stok", "tükeniyor", "stok tükeniyor",
+        "hemen yakala", "stok azaliyor"
+    ])
+    fiyat_var = bool(re.search(r"[\d.,]+\s*(?:tl|₺)", metin_lower))
+    if stok_sinyali and fiyat_var:
+        return 50  # Stok uyarili urunleri MIN_INDIRIM esiginden goster
+
     return 0
 
 def fiyat_parse(fiyat_str):
@@ -300,9 +330,39 @@ def fiyat_parse(fiyat_str):
         return 0.0
 
 def fiyat_bul(metin):
-    eslesme = re.findall(r"([\d.,]+)\s*(?:TL|tl|₺|lira)", metin or "")
-    if len(eslesme) >= 2:
-        degerler = [(fiyat_parse(f), f) for f in eslesme]
+    if not metin:
+        return None, None, 0, 0
+
+    bulunan = []
+
+    # 1. "İndirimli Fiyat: 130,00" veya "İndirimli Fiyat: ₺130,00"
+    indirimli = re.findall(
+        r"(?:indirimli\s*fiyat|sale\s*price)\s*[:\-]?\s*[₺$€]?\s*([\d.,]+)",
+        metin, re.IGNORECASE
+    )
+    normal = re.findall(
+        r"(?:normal\s*fiyat|liste\s*fiyat|original\s*price)\s*[:\-]?\s*[₺$€]?\s*([\d.,]+)",
+        metin, re.IGNORECASE
+    )
+    if indirimli and normal:
+        yeni_v = fiyat_parse(indirimli[0])
+        eski_v = fiyat_parse(normal[0])
+        if eski_v > yeni_v > 0:
+            return normal[0], indirimli[0], eski_v, yeni_v
+
+    # 2. ₺ sembolunden sonraki sayi (₺130,00 veya ₺ 130,00)
+    tl_sembolu = re.findall(r"₺\s*([\d.,]+)", metin)
+    if tl_sembolu:
+        bulunan.extend(tl_sembolu)
+
+    # 3. Sayi + TL/tl/lira
+    tl_sonra = re.findall(r"([\d.,]+)\s*(?:TL|tl|lira)", metin)
+    if tl_sonra:
+        bulunan.extend(tl_sonra)
+
+    # 4. Tekrar eklenenleri temizle
+    if len(bulunan) >= 2:
+        degerler = [(fiyat_parse(f), f) for f in bulunan]
         degerler = [(v, s) for v, s in degerler if v > 0]
         if len(degerler) >= 2:
             sirali = sorted(degerler, key=lambda x: x[0], reverse=True)
@@ -310,6 +370,7 @@ def fiyat_bul(metin):
             yeni_val, yeni_str = sirali[-1]
             if eski_val > yeni_val:
                 return eski_str, yeni_str, eski_val, yeni_val
+
     return None, None, 0, 0
 
 def magaza_bul(metin):
