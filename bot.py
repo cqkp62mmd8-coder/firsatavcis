@@ -48,8 +48,10 @@ KAYNAK_KANALLAR = [
     "@yurtdisifirsat",
 ]
 
-GORULMUS_FILE   = "gorulmus.json"
-ISTATISTIK_FILE = "istatistik.json"
+# Railway Volume icin kalici dizin (Volume bagliysa /data, yoksa mevcut dizin)
+DATA_DIR = "/data" if os.path.exists("/data") else "."
+GORULMUS_FILE   = os.path.join(DATA_DIR, "gorulmus.json")
+ISTATISTIK_FILE = os.path.join(DATA_DIR, "istatistik.json")
 LOGO_DOSYA      = "logo.PNG"
 GORULMUS_MAX    = 3000
 GORULMUS_TTL    = 7 * 24 * 3600
@@ -145,13 +147,17 @@ ist_degisim_sayac = 0
 gunun_urunleri    = []
 marka_son_mesaj   = {}
 bot_client        = None
-mesaj_kuyrugu     = None  # asyncio.Queue - main'de baslatilir
+mesaj_kuyrugu     = None  # asyncio.Queue(maxsize=50) - main'de baslatilir
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 # ═══════════════════════════════════════════════════════════════
 # LOGLAMA
 # ═══════════════════════════════════════════════════════════════
+def gece_modu_aktif():
+    saat = datetime.now().hour
+    return saat >= 23 or saat < 8
+
 def log(seviye, mesaj):
     print("[" + datetime.now().strftime("%H:%M:%S") + "] [" + seviye + "] " + mesaj)
 
@@ -259,8 +265,13 @@ def markdown_temizle(metin):
     return metin
 
 def benzerlik_anahtari(metin):
-    # Hem metin hash'i hem de urun+fiyat hash'i ile duplikat yakala
-    temiz = re.sub(r'\s+', ' ', (metin or "").strip().lower())
+    urun = urun_adi_bul(metin) or ''
+    _, yeni, _, _ = fiyat_bul(metin)
+    yeni = yeni or ''
+    ham = (urun + yeni).lower().replace(' ', '')
+    if len(ham) > 5:
+        return hashlib.md5(ham.encode()).hexdigest()
+    temiz = re.sub(r'\s+', ' ', (metin or '').strip().lower())
     return hashlib.md5(temiz.encode()).hexdigest()
 
 def marka_spam_kontrol(magaza):
@@ -464,6 +475,53 @@ def ozel_etiket(metin, indirim):
     if indirim >= 70:                                          return "🏆 SÜPER FIRSAT"
     return None
 
+def sahte_indirim_mi(metin, indirim):
+    if indirim < 75:
+        return False
+    ml = metin.lower()
+    guvenilir = ["apple", "samsung", "sony", "lg", "philips", "dyson", "nike",
+                 "adidas", "puma", "asus", "lenovo", "dell", "xiaomi", "huawei",
+                 "bosch", "siemens", "toshiba", "canon", "hp", "acer"]
+    for marka in guvenilir:
+        if marka in ml:
+            return False
+    if indirim >= 88:
+        return True
+    return False
+
+def firsat_skoru_hesapla(metin, indirim, buton_linkleri):
+    skor = 0.0
+    if indirim >= 80:   skor += 4.0
+    elif indirim >= 70: skor += 3.5
+    elif indirim >= 60: skor += 3.0
+    elif indirim >= 50: skor += 2.5
+    elif indirim >= 30: skor += 1.5
+    else:               skor += 0.5
+    link = link_bul(metin, buton_linkleri)
+    if link:
+        if any(x in link for x in ["trendyol.com", "amazon.com.tr", "hepsiburada.com"]):
+            skor += 2.0
+        else:
+            skor += 1.0
+    e, y, ev, yv = fiyat_bul(metin)
+    if e and y and ev > 0 and yv > 0:
+        skor += 2.0
+        if ev - yv >= 100:
+            skor += 0.3
+    elif y:
+        skor += 1.0
+    if urun_adi_bul(metin): skor += 1.0
+    if stok_durumu_bul(metin): skor += 0.2
+    if sahte_indirim_mi(metin, indirim): skor -= 2.0
+    return round(max(0.0, min(10.0, skor)), 1)
+
+def firsat_skoru_yildiz(skor):
+    if skor >= 9:   return "🌟🌟🌟🌟🌟"
+    if skor >= 7.5: return "🌟🌟🌟🌟"
+    if skor >= 6:   return "🌟🌟🌟"
+    if skor >= 4:   return "🌟🌟"
+    return "🌟"
+
 def yildiz_goster(indirim):
     if indirim >= 80: return "⭐⭐⭐⭐⭐"
     if indirim >= 70: return "⭐⭐⭐⭐"
@@ -482,23 +540,32 @@ def logo_ekle(gorsel_bytes):
     try:
         if not os.path.exists(LOGO_DOSYA):
             return gorsel_bytes
-        urun_img = Image.open(BytesIO(gorsel_bytes)).convert("RGBA")
+        urun_img = Image.open(BytesIO(gorsel_bytes)).convert('RGBA')
         w, h = urun_img.size
-        logo_ham = Image.open(LOGO_DOSYA).convert("RGBA")
+        logo_ham = Image.open(LOGO_DOSYA).convert('RGBA')
         lw, lh = logo_ham.size
-        hedef_w = max(60, min(160, int(w * 0.18)))
+        bosluk = 10
+
+        # Sag alt - buyuk logo (%30 genislik)
+        hedef_w = max(100, min(220, int(w * 0.30)))
         hedef_h = int(hedef_w * (lh / lw))
-        logo = logo_ham.resize((hedef_w, hedef_h), Image.LANCZOS)
-        bosluk = 12
+        logo_buyuk = logo_ham.resize((hedef_w, hedef_h), Image.LANCZOS)
         x = max(0, w - hedef_w - bosluk)
         y = max(0, h - hedef_h - bosluk)
-        urun_img.paste(logo, (x, y), logo)
+        urun_img.paste(logo_buyuk, (x, y), logo_buyuk)
+
+        # Sol alt - kucuk logo (rakip logo uzeri icin)
+        kucuk_w = max(60, min(120, int(w * 0.15)))
+        kucuk_h = int(kucuk_w * (lh / lw))
+        logo_kucuk = logo_ham.resize((kucuk_w, kucuk_h), Image.LANCZOS)
+        urun_img.paste(logo_kucuk, (bosluk, h - kucuk_h - bosluk), logo_kucuk)
+
         cikti = BytesIO()
-        urun_img.convert("RGB").save(cikti, format="JPEG", quality=92)
+        urun_img.convert('RGB').save(cikti, format='JPEG', quality=92)
         cikti.seek(0)
         return cikti.read()
     except Exception as e:
-        log("UYARI", "Logo ekleme hatasi: " + str(e))
+        log('UYARI', 'Logo ekleme hatasi: ' + str(e))
         return gorsel_bytes
 
 def hashtag_olustur(kategori_hashtagler, magaza):
@@ -533,6 +600,8 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
     baslik       = akilli_baslik(indirim, indirim_turu)
     zaman        = datetime.now().strftime("%H:%M")
     yildiz       = yildiz_goster(indirim)
+    fs_skor     = firsat_skoru_hesapla(metin, indirim, buton_linkleri)
+    fs_yildiz   = firsat_skoru_yildiz(fs_skor)
 
     s = []
 
@@ -552,6 +621,7 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
         s.append("⏰ Sınırlı süre!  •  🕐 " + zaman)
     else:
         s.append(baslik + "  " + yildiz)
+        s.append("📊 Fırsat Skoru: <b>" + str(fs_skor) + "/10</b>  " + fs_yildiz)
         if etiket:
             s.append(etiket)
         s.append("")
@@ -568,6 +638,8 @@ def sablon_olustur(metin, indirim, buton_linkleri=None):
         s.append(m_emoji + " <b>" + magaza + "</b>  •  🕐 " + zaman)
         if stok_kritik:
             s.append("⚠️ <b>Son stoklar!</b>")
+        if sahte_indirim_mi(metin, indirim):
+            s.append("⚠️ <i>Bu indirim oranı alışılmışın dışında, satın almadan araştırın.</i>")
         if kupon:
             s.append("🎟️ Kupon: <code>" + kupon + "</code>")
         if min_siparis:
@@ -588,11 +660,27 @@ async def kuyruk_worker():
     log("BILGI", "Kuyruk worker aktif")
     while True:
         try:
-            sablon, gorsel_medya, link, magaza, kat_adi, kanal_adi, indirim = await mesaj_kuyrugu.get()
+            kuyruk_verisi = await mesaj_kuyrugu.get()
+            sablon, gorsel_medya, link, magaza, kat_adi, kanal_adi, indirim = kuyruk_verisi[:7]
+            fs_skor = kuyruk_verisi[7] if len(kuyruk_verisi) > 7 else 0.0
 
-            # Inline buton
+            # Gece modu
+            sessiz = gece_modu_aktif()
+            if sessiz:
+                log("BILGI", "Gece modu aktif - sessiz bildirim")
+
+            # Interaktif butonlar (bot_client varsa)
             buton = None
-            if link:
+            if link and bot_client:
+                from telethon.tl.types import KeyboardButtonUrl, KeyboardButtonCallback, KeyboardButtonRow, ReplyInlineMarkup
+                buton = ReplyInlineMarkup(rows=[
+                    KeyboardButtonRow(buttons=[
+                        KeyboardButtonUrl(text="🔗 Fırsata Git", url=link),
+                        KeyboardButtonCallback(text="🔥 Kacmaz Firsat", data=b"vote_good"),
+                        KeyboardButtonCallback(text="❌ Sahte Indirim", data=b"vote_fake"),
+                    ])
+                ])
+            elif link:
                 from telethon.tl.types import KeyboardButtonUrl, KeyboardButtonRow, ReplyInlineMarkup
                 buton = ReplyInlineMarkup(rows=[KeyboardButtonRow(buttons=[
                     KeyboardButtonUrl(text="🔗 Fırsata Git", url=link)
@@ -614,9 +702,9 @@ async def kuyruk_worker():
                         buf = BytesIO(logolu)
                         buf.name = "urun.jpg"
                         if bot_client and link:
-                            msg = await bot_client.send_message(HEDEF_KANAL, final_metin, file=buf, parse_mode="html", buttons=buton)
+                            msg = await bot_client.send_message(HEDEF_KANAL, final_metin, file=buf, parse_mode="html", buttons=buton, silent=sessiz)
                         else:
-                            msg = await client.send_message(HEDEF_KANAL, final_metin, file=buf, parse_mode="html")
+                            msg = await client.send_message(HEDEF_KANAL, final_metin, file=buf, parse_mode="html", silent=sessiz)
                     else:
                         raise Exception("Gorsel cok kucuk")
                 except Exception as img_e:
@@ -633,6 +721,14 @@ async def kuyruk_worker():
 
             if msg:
                 await tepki_ekle(msg)
+
+            # Yuksek skorlu mesajlari sabitle (skor kuyrukta 7. eleman)
+            try:
+                if len(kuyruk_verisi) > 7 and kuyruk_verisi[7] >= 9.0:
+                    await client.pin_message(HEDEF_KANAL, msg.id, notify=False)
+                    log("OK", "Yuksek skor mesaj sabitlendi: " + str(kuyruk_verisi[7]) + "/10")
+            except Exception as pin_e:
+                log("UYARI", "Pin hatasi: " + str(pin_e))
 
             istatistik_guncelle(kanal_adi, magaza, kat_adi)
             log("OK", "Gonderildi [" + magaza + "] %" + str(indirim) + " | Kuyrukta: " + str(mesaj_kuyrugu.qsize()))
@@ -923,8 +1019,17 @@ async def mesaj_dinle(event):
         kat_adi, _, _ = kategori_bul(ham_metin)
         kanal_adi = getattr(getattr(event, "chat", None), "username", None) or "bilinmiyor"
 
-        # Kuyruga ekle
-        await mesaj_kuyrugu.put((sablon, gorsel_medya, link, magaza, kat_adi, kanal_adi, indirim))
+        # Firsat skoru hesapla
+        fs_skor = firsat_skoru_hesapla(ham_metin, indirim, buton_linkleri)
+
+        # Kuyruga ekle (dolu ise en eski mesaji cikar)
+        if mesaj_kuyrugu.full():
+            try:
+                mesaj_kuyrugu.get_nowait()
+                log("UYARI", "Kuyruk doldu, eski mesaj cikarildi")
+            except:
+                pass
+        await mesaj_kuyrugu.put((sablon, gorsel_medya, link, magaza, kat_adi, kanal_adi, indirim, fs_skor))
         log("BILGI", "Kuyruga eklendi [" + magaza + "] %" + str(indirim) + " | Kuyruk: " + str(mesaj_kuyrugu.qsize()))
 
     except Exception as e:
@@ -949,7 +1054,7 @@ async def test_gonder():
         log("TEST", str(i) + ". " + t["aciklama"] + " -> %" + str(indirim) + " skor:" + str(skor))
         if sablon and link:
             gunun_urunune_ekle(metin, indirim, [])
-            await mesaj_kuyrugu.put((sablon, None, link, magaza_bul(metin), kategori_bul(metin)[0], "test", indirim))
+            await mesaj_kuyrugu.put((sablon, None, link, magaza_bul(metin), kategori_bul(metin)[0], "test", indirim, firsat_skoru_hesapla(metin, indirim, [])))
             log("TEST", "   Kuyruga eklendi")
         await asyncio.sleep(1)
     await asyncio.sleep(5)
@@ -972,7 +1077,7 @@ async def main():
         log("KRITIK", "SESSION_STRING eksik!")
         return
 
-    mesaj_kuyrugu = asyncio.Queue()
+    mesaj_kuyrugu = asyncio.Queue(maxsize=50)
 
     while True:
         try:
@@ -980,14 +1085,29 @@ async def main():
             log("OK", "Baglandi!")
 
             if BOT_TOKEN:
+            if BOT_TOKEN:
                 try:
-                    bot_client = TelegramClient("bot_session", API_ID, API_HASH)
+                    bot_client = TelegramClient('bot_session', API_ID, API_HASH)
                     await bot_client.start(bot_token=BOT_TOKEN)
-                    log("OK", "Bot client aktif - inline butonlar calisiyor")
-                except Exception as e:
-                    log("UYARI", "Bot client: " + str(e))
-                    bot_client = None
+                    log('OK', 'Bot client aktif - inline butonlar calisiyor')
 
+                    # Callback handler - buton basilinca
+                    @bot_client.on(events.CallbackQuery())
+                    async def buton_basildi(event):
+                        try:
+                            data = event.data
+                            if data == b'vote_good':
+                                await event.answer('Tesekkurler! Bu firsat kacmaz olarak isaretlendi.', alert=False)
+                            elif data == b'vote_fake':
+                                await event.answer('Bildiriminiz icin tesekkurler! Incelenecek.', alert=False)
+                            else:
+                                await event.answer('Islem alindi.', alert=False)
+                        except Exception as e:
+                            log('HATA', 'Callback: ' + str(e))
+
+                except Exception as e:
+                    log('UYARI', 'Bot client: ' + str(e))
+                    bot_client = None
             await kanallari_dogrula()
 
             await admin_bildir(
