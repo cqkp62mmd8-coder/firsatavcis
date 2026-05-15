@@ -916,103 +916,109 @@ async def watchdog():
 # ═══════════════════════════════════════════════════════════════
 @client.on(events.NewMessage(chats=KAYNAK_KANALLAR))
 async def mesaj_geldi(event):
-    global son_mesaj_zamani
     try:
-        metin = markdown_temizle(event.message.text or "")
-        indirim = indirim_oranini_bul(metin)
-        if indirim < MIN_INDIRIM:
-            return
-
-        mid = mesaj_id_olustur(metin)
-        if gorulmus_var_mi(mid):
-            log("BILGI", "Duplikat atlandi")
-            return
-        gorulmus_ekle(mid)
-
-        # Buton linklerini topla
-        buton_linkleri = []
+        global son_mesaj_zamani
         try:
-            if event.message.buttons:
-                for satir in event.message.buttons:
-                    for buton in satir:
-                        if hasattr(buton, "url") and buton.url:
-                            buton_linkleri.append(buton.url)
-        except Exception:
-            pass
+            metin = markdown_temizle(event.message.text or "")
+            indirim = indirim_oranini_bul(metin)
+            if indirim < MIN_INDIRIM:
+                return
 
-        # Gunun urunleri listesine ekle
-        gunun_urunune_ekle(metin, indirim, buton_linkleri)
+            mid = mesaj_id_olustur(metin)
+            if gorulmus_var_mi(mid):
+                log("BILGI", "Duplikat atlandi")
+                return
+            gorulmus_ekle(mid)
 
-        # Sablon ve buton
-        sablon, inline_buton = sablon_olustur(metin, indirim, buton_linkleri)
-        if not sablon:
-            return
-
-        # Rate limiting
-        loop = asyncio.get_running_loop()
-        simdi = loop.time()
-        gecen = simdi - son_mesaj_zamani
-        if gecen < MESAJ_BEKLEME:
-            await asyncio.sleep(MESAJ_BEKLEME - gecen)
-        son_mesaj_zamani = loop.time()
-
-        kanal_adi = getattr(getattr(event, "chat", None), "username", None) or "bilinmiyor"
-        magaza = magaza_bul(metin)
-
-        # Gonder
-        if event.message.media and isinstance(event.message.media, MessageMediaPhoto):
+            # Buton linklerini topla
+            buton_linkleri = []
             try:
-                gorsel_bytes = await client.download_media(event.message.media, bytes)
-                if gorsel_bytes and len(gorsel_bytes) > 1000:
-                    logolu = logo_ekle(gorsel_bytes)
-                    buf = BytesIO(logolu)
-                    buf.name = "urun.jpg"
+                if event.message.buttons:
+                    for satir in event.message.buttons:
+                        for buton in satir:
+                            if hasattr(buton, "url") and buton.url:
+                                buton_linkleri.append(buton.url)
+            except Exception:
+                pass
+
+            # Gunun urunleri listesine ekle
+            gunun_urunune_ekle(metin, indirim, buton_linkleri)
+
+            # Sablon ve buton
+            sablon, inline_buton = sablon_olustur(metin, indirim, buton_linkleri)
+            if not sablon:
+                return
+
+            # Rate limiting
+            loop = asyncio.get_running_loop()
+            simdi = loop.time()
+            gecen = simdi - son_mesaj_zamani
+            if gecen < MESAJ_BEKLEME:
+                await asyncio.sleep(MESAJ_BEKLEME - gecen)
+            son_mesaj_zamani = loop.time()
+
+            kanal_adi = getattr(getattr(event, "chat", None), "username", None) or "bilinmiyor"
+            magaza = magaza_bul(metin)
+
+            # Gonder
+            if event.message.media and isinstance(event.message.media, MessageMediaPhoto):
+                try:
+                    gorsel_bytes = await client.download_media(event.message.media, bytes)
+                    if gorsel_bytes and len(gorsel_bytes) > 1000:
+                        logolu = logo_ekle(gorsel_bytes)
+                        buf = BytesIO(logolu)
+                        buf.name = "urun.jpg"
+                        msg = await client.send_message(
+                            HEDEF_KANAL, sablon,
+                            file=buf,
+                            parse_mode="html"
+                        )
+                    else:
+                        msg = await client.send_message(
+                            HEDEF_KANAL, sablon,
+                            parse_mode="html"
+                        )
+                except Exception as img_e:
+                    log("UYARI", "Gorsel hatasi: " + str(img_e))
                     msg = await client.send_message(
                         HEDEF_KANAL, sablon,
-                        file=buf,
-                        parse_mode="html"
+                        parse_mode="html",
+                        buttons=inline_buton
                     )
-                else:
-                    msg = await client.send_message(
-                        HEDEF_KANAL, sablon,
-                        parse_mode="html"
-                    )
-            except Exception as img_e:
-                log("UYARI", "Gorsel hatasi: " + str(img_e))
+            else:
                 msg = await client.send_message(
                     HEDEF_KANAL, sablon,
                     parse_mode="html",
                     buttons=inline_buton
                 )
-        else:
-            msg = await client.send_message(
-                HEDEF_KANAL, sablon,
-                parse_mode="html",
-                buttons=inline_buton
-            )
 
-        # Ates tepkisi ekle
-        await tepki_ekle(msg)
+            # Ates tepkisi ekle
+            await tepki_ekle(msg)
 
-        istatistik_guncelle(kanal_adi, magaza)
-        log("OK", "%" + str(indirim) + " [" + kanal_adi + "] [" + magaza + "] " + metin[:40].replace("\n", " "))
+            istatistik_guncelle(kanal_adi, magaza)
+            log("OK", "%" + str(indirim) + " [" + kanal_adi + "] [" + magaza + "] " + metin[:40].replace("\n", " "))
 
-    except FloodWaitError as e:
-        log("UYARI", "FloodWait " + str(e.seconds) + "s")
-        await asyncio.sleep(e.seconds + 5)
-    except ChannelPrivateError:
-        log("HATA", "Kanal ozel/kapali")
-    except UsernameInvalidError as e:
-        log("HATA", "Gecersiz kullanici adi: " + str(e))
-    except ChatWriteForbiddenError:
-        log("KRITIK", "Yazma izni yok!")
-        await admin_bildir("🚨 Hedef kanala yazma izni yok!")
+        except FloodWaitError as e:
+            log("UYARI", "FloodWait " + str(e.seconds) + "s")
+            await asyncio.sleep(e.seconds + 5)
+        except ChannelPrivateError:
+            log("HATA", "Kanal ozel/kapali")
+        except UsernameInvalidError as e:
+            log("HATA", "Gecersiz kullanici adi: " + str(e))
+        except ChatWriteForbiddenError:
+            log("KRITIK", "Yazma izni yok!")
+            await admin_bildir("🚨 Hedef kanala yazma izni yok!")
+        except Exception as e:
+            log("HATA", str(e))
+
+    # ═══════════════════════════════════════════════════════════════
+    # TEST
+    # ═══════════════════════════════════════════════════════════════
+
     except Exception as e:
-        log("HATA", str(e))
+        print(f"[EVENT HATA] {e}")
+        return
 
-# ═══════════════════════════════════════════════════════════════
-# TEST
-# ═══════════════════════════════════════════════════════════════
 async def test_gonder():
     testler = [
         {
@@ -1091,3 +1097,209 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+# ═══════════════════════════════════════════════════════════════
+# PREMIUM ENGINE
+# ═══════════════════════════════════════════════════════════════
+
+from collections import defaultdict, deque
+
+MESAJ_QUEUE = asyncio.Queue()
+MARKA_CACHE = defaultdict(deque)
+
+def kalite_skoru_hesapla(urun, fiyat, indirim, link, media=False):
+    skor = 0
+
+    if link:
+        skor += 20
+
+    if urun:
+        skor += 25
+
+    if fiyat:
+        skor += 25
+
+    if indirim:
+        skor += 20
+
+    if media:
+        skor += 10
+
+    return skor
+
+
+def akilli_baslik(indirim):
+    try:
+        indirim = int(indirim)
+    except:
+        indirim = 0
+
+    if indirim >= 70:
+        return "🔥 YANGIN FİYAT"
+
+    if indirim >= 50:
+        return "🔥 BÜYÜK İNDİRİM"
+
+    if indirim >= 20:
+        return "💰 FIRSAT"
+
+    return "🛍️ İNDİRİM"
+
+
+def otomatik_etiketler(metin):
+    etiketler = []
+
+    m = metin.lower()
+
+    if any(x in m for x in [
+        "flash",
+        "son 1 saat",
+        "stoklarla sınırlı",
+        "bugüne özel"
+    ]):
+        etiketler.append("⚡ FLASH SALE")
+
+    if any(x in m for x in [
+        "bedava",
+        "ücretsiz",
+        "hediye"
+    ]):
+        etiketler.append("🎁 HEDİYE KAMPANYA")
+
+    if any(x in m for x in [
+        "2025 model",
+        "yeni seri",
+        "new"
+    ]):
+        etiketler.append("🆕 YENİ ÜRÜN")
+
+    return " ".join(etiketler)
+
+
+def marka_spam_kontrol(marka):
+    if not marka:
+        return False
+
+    simdi = datetime.now()
+
+    while MARKA_CACHE[marka] and (
+        simdi - MARKA_CACHE[marka][0]
+    ).seconds > 3600:
+        MARKA_CACHE[marka].popleft()
+
+    if len(MARKA_CACHE[marka]) >= 3:
+        return True
+
+    MARKA_CACHE[marka].append(simdi)
+
+    return False
+
+
+async def kanal_dogrula():
+    global KAYNAK_KANALLAR
+
+    aktif = []
+
+    for kanal in KAYNAK_KANALLAR:
+        try:
+            await client.get_entity(kanal)
+            aktif.append(kanal)
+            print(f"[KANAL OK] {kanal}")
+
+        except Exception as e:
+            print(f"[KANAL SILINDI] {kanal} | {e}")
+
+    KAYNAK_KANALLAR = aktif
+
+
+async def queue_worker():
+    while True:
+        veri = await MESAJ_QUEUE.get()
+
+        try:
+            if veri.get("dosya"):
+                await client.send_file(
+                    HEDEF_KANAL,
+                    veri["dosya"],
+                    caption=veri["mesaj"],
+                    link_preview=False
+                )
+            else:
+                await client.send_message(
+                    HEDEF_KANAL,
+                    veri["mesaj"],
+                    link_preview=False
+                )
+
+            await asyncio.sleep(MESAJ_BEKLEME)
+
+        except FloodWaitError as e:
+            await asyncio.sleep(e.seconds)
+
+        except Exception as e:
+            print(f"[QUEUE HATA] {e}")
+
+        finally:
+            MESAJ_QUEUE.task_done()
+
+
+def premium_mesaj(
+    baslik,
+    urun,
+    eski,
+    yeni,
+    indirim,
+    magaza,
+    link,
+    etiketler,
+    hashtagler
+):
+    return f"""
+{baslik}
+
+📌 {urun}
+
+💰 {eski} → {yeni}
+📉 %{indirim} İndirim
+
+🏪 {magaza}
+
+{etiketler}
+
+🛒 Satın Al:
+{link}
+
+{hashtagler}
+"""
+
+
+async def haftalik_rapor():
+    while True:
+        try:
+            now = datetime.now()
+
+            if now.weekday() == 6 and now.hour == 20:
+                rapor = f"""
+📊 Haftalık Fırsat Özeti
+
+• Bu hafta {istatistik.get('paylasilan', 0)} fırsat paylaşıldı
+• Sistem durumu: Aktif
+• Kaynak kanal sayısı: {len(KAYNAK_KANALLAR)}
+
+🔥 Daha fazla fırsat için bizi takip edin.
+"""
+
+                await client.send_message(
+                    HEDEF_KANAL,
+                    rapor
+                )
+
+                await asyncio.sleep(3600)
+
+            await asyncio.sleep(60)
+
+        except Exception as e:
+            print(f"[RAPOR HATA] {e}")
+            await asyncio.sleep(60)
+
