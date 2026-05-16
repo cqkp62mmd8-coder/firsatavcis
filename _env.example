@@ -1,0 +1,23 @@
+# Telegram API (my.telegram.org)
+API_ID=0
+API_HASH=
+
+# Kullanıcı oturumu (Telethon StringSession)
+SESSION_STRING=
+
+# Bot token (opsiyonel – inline butonlar için @BotFather)
+BOT_TOKEN=
+
+# Hedef kanal (örn. @firsatpulsum veya -100xxxxxxxxxx)
+CHANNEL_ID=@firsatpulsum
+
+# Admin Telegram user ID (watchdog mesajları)
+ADMIN_ID=
+
+# Filtreler
+MIN_INDIRIM=50        # Bu oranın altındaki mesajlar atlanır
+MIN_KALITE=15         # Bu puanın altındaki mesajlar atlanır
+KUYRUK_BEKLEME=180    # Gönderimler arası bekleme (saniye)
+
+# Test
+TEST_MODE=0           # 1 yapınca 3 örnek fırsat gönderir
