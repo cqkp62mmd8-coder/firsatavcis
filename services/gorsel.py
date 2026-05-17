@@ -18,8 +18,8 @@ def logo_ekle(gorsel_bytes: bytes) -> bytes:
         logo = Image.open(config.LOGO_DOSYA).convert("RGBA")
         _, lh = logo.size
 
-        # FIX: Tek logo, alt-orta — genişliğin %28'i, max 260px
-        hedef_w = max(80, min(260, int(w * 0.28)))
+        # Logo: alt-orta — genişliğin %12'si, max 120px
+        hedef_w = max(50, min(120, int(w * 0.12)))
         hedef_h = int(hedef_w * lh / logo.size[0])
         logo_r  = logo.resize((hedef_w, hedef_h), Image.LANCZOS)
 
