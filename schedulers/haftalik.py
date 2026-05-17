@@ -8,13 +8,13 @@ from telethon import TelegramClient
 
 import config
 from services.kuyruk import tepki_ekle
-from utils.cache import ist_yukle, ist_kaydet
+from utils.cache import ist_yukle
 from utils.log import log
 
 
 async def gonder(client: TelegramClient) -> None:
+    # FIX: ist_kaydet() burada gereksizdi — veri değiştirilmeden kaydediliyordu
     ist = ist_yukle()
-    ist_kaydet()
     simdi = datetime.now()
     haftalik = sum(
         ist.get("gunluk", {}).get((simdi - timedelta(days=i)).strftime("%Y-%m-%d"), 0)
