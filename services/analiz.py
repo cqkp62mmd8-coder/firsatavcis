@@ -48,8 +48,22 @@ def benzerlik_anahtari(metin: str) -> str:
 _marka_gecmis: dict[str, list[float]] = {}
 
 
+def _marka_gecmis_temizle() -> None:
+    """FIX: Dict sınırsız büyümesin — 500 mağazayı geçince temizle."""
+    if len(_marka_gecmis) <= 500:
+        return
+    simdi = datetime.now(timezone.utc).timestamp()
+    eskiler = [
+        k for k, v in _marka_gecmis.items()
+        if not v or simdi - max(v) > config.MARKA_SPAM_SURE * 2
+    ]
+    for k in eskiler:
+        del _marka_gecmis[k]
+
+
 def marka_spam_kontrol(magaza: str) -> bool:
     """True dönerse bu mağaza saatte MARKA_SPAM_LIMIT'ten fazla göndermiş."""
+    _marka_gecmis_temizle()
     simdi = datetime.now(timezone.utc).timestamp()
     listesi = _marka_gecmis.setdefault(magaza, [])
     _marka_gecmis[magaza] = [t for t in listesi if simdi - t < config.MARKA_SPAM_SURE]
@@ -282,7 +296,7 @@ def kalite_skoru(metin: str, indirim: int, buton_linkleri: list[str]) -> int:
     if link_bul(metin, buton_linkleri): s += 20
     e, y, _, _ = fiyat_bul(metin)
     s += 20 if (e and y) else (10 if y else 0)
-    if urun_adi_bul(metin):  s += 15
+    if urun_adi_bul(metin):   s += 15
     if stok_kritik_mi(metin): s += 5
     return s
 
