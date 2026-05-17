@@ -113,7 +113,7 @@ async def main() -> None:
             # Kanal doğrulama & handler kaydı
             config.KAYNAK_KANALLAR[:] = await kanal_dogrula(tg.client)
             mesaj_handler.kaydet(tg.client, kuyruk)
-            admin_handler.kaydet(tg.client, kuyruk)   # Admin komutları
+            admin_handler.kaydet(tg.client, kuyruk, tg.bot_client)   # Admin komutları
 
             await admin_bildir(
                 tg.client,
