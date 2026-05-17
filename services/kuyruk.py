@@ -19,15 +19,6 @@ _MAX_RETRY = 3
 
 # ── Tepki ───────────────────────────────────────────────────────
 
-async def tepki_ekle(client: TelegramClient, mesaj) -> None:
-    try:
-        await client(SendReactionRequest(
-            peer=config.HEDEF_KANAL,
-            msg_id=mesaj.id,
-            reaction=[ReactionEmoji(emoticon="🔥")],
-        ))
-    except Exception as e:
-        log("UYARI", f"Tepki eklenemedi: {e}")
 
 
 # ── Buton fabrikası ─────────────────────────────────────────────
