@@ -31,8 +31,9 @@ MARKA_SPAM_SURE  = 3_600            # saniye
 
 # ── Kara liste ───────────────────────────────────────────────────
 KARA_LISTE = [
-    "corap", "çorap", "kilif", "kılıf", "sticker",
-    "ekran koruyucu", "defter", "kalem", "ase",
+    "çorap", "kılıf", "sticker",
+    "ekran koruyucu", "defter", "kalem",
+    "ase modeli", "aksesuar seti",
 ]
 
 # ── Kaynak kanallar ──────────────────────────────────────────────
