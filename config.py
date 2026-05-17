@@ -13,7 +13,7 @@ HEDEF_KANAL    = os.environ.get("CHANNEL_ID", "")
 ADMIN_ID       = os.environ.get("ADMIN_ID", "")
 
 # ── Filtre eşikleri ──────────────────────────────────────────────
-MIN_INDIRIM    = int(os.environ.get("MIN_INDIRIM", "50"))
+MIN_INDIRIM    = int(os.environ.get("MIN_INDIRIM", "20"))
 MIN_KALITE     = int(os.environ.get("MIN_KALITE", "15"))
 KUYRUK_BEKLEME = int(os.environ.get("KUYRUK_BEKLEME", "180"))
 TEST_MODE      = os.environ.get("TEST_MODE", "0") == "1"
