@@ -3,7 +3,7 @@ FırsatPulsu — Ana Giriş Noktası
 Çalıştır: python main.py
 """
 import asyncio
-import os
+import sys
 
 from telethon import TelegramClient
 
@@ -12,8 +12,28 @@ import client as tg
 from utils.log import log
 from watchdog import admin_bildir, kanal_dogrula, calistir as watchdog_calistir
 from handlers import mesaj as mesaj_handler, callback as callback_handler
+from handlers import admin as admin_handler
 from services.kuyruk import worker as kuyruk_worker
 from schedulers import gunluk, surpriz, haftalik
+
+
+# ── Başlangıç doğrulaması ────────────────────────────────────────
+
+def _config_dogrula() -> bool:
+    """Kritik env değişkenlerini kontrol eder; eksik varsa False döner."""
+    eksik = []
+    if not config.API_ID or config.API_ID == 0:
+        eksik.append("API_ID")
+    if not config.API_HASH:
+        eksik.append("API_HASH")
+    if not config.SESSION_STRING:
+        eksik.append("SESSION_STRING")
+    if not config.HEDEF_KANAL:
+        eksik.append("CHANNEL_ID")
+    if eksik:
+        log("KRITIK", f"Eksik ortam değişkenleri: {', '.join(eksik)}")
+        return False
+    return True
 
 
 # ── Test modu ───────────────────────────────────────────────────
@@ -61,12 +81,16 @@ async def _test_gonder(kuyruk: asyncio.Queue) -> None:
 # ── Ana döngü ───────────────────────────────────────────────────
 
 async def main() -> None:
-    log("SISTEM", f"FırsatPulsu v8 başlatılıyor…")
-    log("SISTEM", f"Min indirim: %{config.MIN_INDIRIM} | Kalite: {config.MIN_KALITE} | Bekleme: {config.KUYRUK_BEKLEME}s")
+    log("SISTEM", "FırsatPulsu v9 başlatılıyor…")
 
-    if not config.SESSION_STRING:
-        log("KRITIK", "SESSION_STRING eksik!")
-        return
+    if not _config_dogrula():
+        sys.exit(1)
+
+    log("SISTEM", (
+        f"Min indirim: %{config.MIN_INDIRIM} | "
+        f"Kalite: {config.MIN_KALITE} | "
+        f"Bekleme: {config.KUYRUK_BEKLEME}s"
+    ))
 
     kuyruk: asyncio.Queue = asyncio.Queue(maxsize=50)
 
@@ -75,7 +99,7 @@ async def main() -> None:
             await tg.client.start()
             log("OK", "Kullanıcı client bağlandı")
 
-            # Bot client (inline butonlar)
+            # Bot client (inline butonlar — opsiyonel)
             if config.BOT_TOKEN:
                 try:
                     tg.bot_client = TelegramClient("bot_session", config.API_ID, config.API_HASH)
@@ -89,12 +113,14 @@ async def main() -> None:
             # Kanal doğrulama & handler kaydı
             config.KAYNAK_KANALLAR[:] = await kanal_dogrula(tg.client)
             mesaj_handler.kaydet(tg.client, kuyruk)
+            admin_handler.kaydet(tg.client, kuyruk)   # Admin komutları
 
             await admin_bildir(
                 tg.client,
-                f"🚀 Bot Başladı v8\n"
+                f"🚀 Bot Başladı v9\n"
                 f"Kanal: {len(config.KAYNAK_KANALLAR)}\n"
-                f"Min indirim: %{config.MIN_INDIRIM}",
+                f"Min indirim: %{config.MIN_INDIRIM}\n\n"
+                f"Admin komutları için /yardim yaz.",
             )
 
             if config.TEST_MODE:
@@ -112,6 +138,9 @@ async def main() -> None:
 
             await tg.client.run_until_disconnected()
 
+        except KeyboardInterrupt:
+            log("SISTEM", "Manuel kapatma — çıkılıyor")
+            break
         except Exception as e:
             log("HATA", f"Bağlantı koptu: {e}")
             log("BILGI", "30s sonra yeniden bağlanılıyor…")
