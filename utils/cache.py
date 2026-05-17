@@ -59,7 +59,6 @@ def gorulmus_temizle() -> None:
     eskiler = [k for k, v in g.items() if simdi - v >= config.GORULMUS_TTL]
     for k in eskiler:
         del g[k]
-    # Maksimum sınır
     if len(g) > config.GORULMUS_MAX:
         fazla = sorted(g.items(), key=lambda x: x[1])[: len(g) - config.GORULMUS_MAX]
         for k, _ in fazla:
@@ -91,23 +90,26 @@ def ist_yukle() -> dict:
 
 
 def ist_kaydet() -> None:
+    # FIX: None guard eklendi — başlatılmamışsa yazmaya çalışma
+    if _istatistik is None:
+        return
     try:
         with open(config.ISTATISTIK_FILE, "w") as f:
             json.dump(_istatistik, f)
-    except Exception:
-        pass
+    except Exception as e:
+        log("HATA", f"istatistik kaydetme: {e}")
 
 
 def ist_guncelle(kanal: str, magaza: str, kategori: str) -> None:
     global _ist_degisim
     ist = ist_yukle()
     ist["toplam"] = ist.get("toplam", 0) + 1
-    ist["kanallar"][kanal]     = ist["kanallar"].get(kanal, 0) + 1
-    ist["magazalar"][magaza]   = ist["magazalar"].get(magaza, 0) + 1
+    ist["kanallar"][kanal]       = ist["kanallar"].get(kanal, 0) + 1
+    ist["magazalar"][magaza]     = ist["magazalar"].get(magaza, 0) + 1
     ist["kategoriler"][kategori] = ist["kategoriler"].get(kategori, 0) + 1
     bugun = datetime.now().strftime("%Y-%m-%d")
     ist["gunluk"][bugun] = ist["gunluk"].get(bugun, 0) + 1
     _ist_degisim += 1
-    if _ist_degisim >= 10:          # Her 10 güncellemede bir diske yaz
+    if _ist_degisim >= 10:
         ist_kaydet()
         _ist_degisim = 0
