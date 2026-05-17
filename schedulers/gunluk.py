@@ -31,7 +31,8 @@ def ekle(metin: str, indirim: int, buton_linkleri: list[str]) -> None:
 
 
 def liste() -> list[dict]:
-    return _urunler
+    # FIX: kopya döndür — dış kod iç listeyi değiştiremez
+    return list(_urunler)
 
 
 async def gonder(client: TelegramClient) -> None:
