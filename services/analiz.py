@@ -6,8 +6,58 @@ import hashlib
 import re
 import unicodedata
 from datetime import datetime, timezone
+from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
 import config
+
+# ════════════════════════════════════════════════════════════════
+# Link temizleme — affiliate / tracking parametrelerini sil
+# ════════════════════════════════════════════════════════════════
+
+_TRACKING_PARAMS = {
+    # UTM
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    # Genel affiliate/ref
+    "ref", "tag", "source", "aff", "affid", "affiliate", "affiliate_id",
+    "aff_id", "aff_sub", "aff_sub2", "aff_sub3", "aff_sub4", "aff_sub5",
+    "tracking_id", "clickid", "click_id", "clickref", "subid",
+    # Sosyal medya / reklam
+    "fbclid", "gclid", "msclkid", "dclid", "yclid", "igshid", "ttclid",
+    # Trendyol
+    "boutiqueId", "merchantId", "campaignId",
+    "sc_channel", "sc_detail", "sc_imax", "sc_min", "sc_mt",
+    "sc_country", "sc_language",
+    # Hepsiburada
+    "magaza",
+    # Amazon
+    "pd_rd_r", "pd_rd_w", "pd_rd_wg",
+    "pf_rd_i", "pf_rd_m", "pf_rd_p", "pf_rd_r", "pf_rd_s", "pf_rd_t",
+    "ie", "qid", "sr",
+}
+
+# Kısa yönlendirme domainleri — zaten redirect, temizlenemez
+_KISA_DOMAIN = {"ty.gl", "hb.biz", "hb.gl", "sl.n11.com", "amzn.to", "amzn.eu"}
+
+
+def link_temizle(url: str) -> str:
+    """URL'den affiliate ve tracking parametrelerini temizler.
+    Kısa URL'lere (ty.gl, hb.biz …) dokunmaz.
+    """
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+        if any(k in parsed.netloc for k in _KISA_DOMAIN):
+            return url          # kısa URL — redirect zinciri, değiştirme
+        if not parsed.query:
+            return url          # parametre yok
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        temiz  = {k: v for k, v in params.items()
+                  if k.lower() not in _TRACKING_PARAMS}
+        yeni_query = urlencode(temiz, doseq=True)
+        return urlunparse(parsed._replace(query=yeni_query))
+    except Exception:
+        return url
 
 # ════════════════════════════════════════════════════════════════
 # Metin temizleme
@@ -236,6 +286,45 @@ def urun_adi_bul(metin: str) -> str | None:
     return None
 
 
+# ── Ref / affiliate link temizleme ──────────────────────────────
+
+_KISALTILMIS = {"ty.gl", "hb.biz", "hb.gl", "sl.n11.com", "amzn.to"}
+
+_REF_PARAMS = {
+    # UTM
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    # Genel affiliate / tracking
+    "ref", "referral", "aff", "affiliate", "partner", "src", "source",
+    "fbclid", "gclid", "msclkid", "yclid", "_ga", "trk", "mc_eid",
+    # Amazon affiliate
+    "tag", "linkcode", "linkid", "ref_",
+    "pf_rd_p", "pf_rd_r", "pd_rd_r", "pd_rd_w", "pd_rd_wg",
+    "pf_rd_s", "pf_rd_t", "pf_rd_i",
+    # Trendyol tracking
+    "boutiqueid", "merchantid", "sav", "pi", "filteredsearchvalues",
+    # HepsiBurada
+    "magaza",
+    # N11
+    "searchterm",
+}
+
+
+def link_temizle(url: str) -> str:
+    """URL'den affiliate / UTM / ref parametrelerini temizler.
+    Kısaltılmış linklere (ty.gl vb.) dokunmaz."""
+    if not url:
+        return url
+    try:
+        p = urlparse(url)
+        if any(k in p.netloc for k in _KISALTILMIS):
+            return url
+        params = parse_qs(p.query, keep_blank_values=False)
+        temiz = {k: v for k, v in params.items() if k.lower() not in _REF_PARAMS}
+        return urlunparse((p.scheme, p.netloc, p.path, p.params, urlencode(temiz, doseq=True), ""))
+    except Exception:
+        return url
+
+
 def link_bul(metin: str, buton_linkleri: list[str] | None = None) -> str | None:
     oncelik = [
         "trendyol.com", "hepsiburada.com", "amazon.com.tr", "mediamarkt.com.tr",
@@ -247,19 +336,19 @@ def link_bul(metin: str, buton_linkleri: list[str] | None = None) -> str | None:
     if buton_linkleri:
         for bl in buton_linkleri:
             if any(p in bl for p in oncelik):
-                return bl
+                return link_temizle(bl)
         for bl in buton_linkleri:
             if not any(g in bl for g in gizli):
-                return bl
+                return link_temizle(bl)
 
     if metin:
         linkler = re.findall(r'https?://[^\s\)\"\<\]\,]+', metin)
         for lnk in linkler:
             if any(p in lnk for p in oncelik):
-                return lnk
+                return link_temizle(lnk)
         for lnk in linkler:
             if not any(g in lnk for g in gizli):
-                return lnk
+                return link_temizle(lnk)
     return None
 
 
