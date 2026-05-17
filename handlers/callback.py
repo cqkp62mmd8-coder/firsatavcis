@@ -12,8 +12,8 @@ def kaydet(bot_client: TelegramClient) -> None:
     async def _callback(event):
         try:
             yanit = {
-                b"vote_good": "Teşekkürler! Bu fırsat kaçmaz olarak işaretlendi.",
-                b"vote_fake": "Bildiriminiz için teşekkürler! İncelenecek.",
+                b"vote_good": "Teşekkürler! Bu fırsat kaçmaz olarak işaretlendi. 🔥",
+                b"vote_fake": "Bildiriminiz için teşekkürler! İncelenecek. 🔍",
             }.get(event.data, "İşlem alındı.")
             await event.answer(yanit, alert=False)
         except Exception as e:
