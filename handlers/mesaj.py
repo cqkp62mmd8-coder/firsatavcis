@@ -8,6 +8,7 @@ from telethon import TelegramClient, events
 from telethon.tl.types import MessageMediaPhoto
 
 import config
+import state
 from services.analiz import (
     markdown_temizle, benzerlik_anahtari,
     indirim_oranini_bul, kalite_skoru, magaza_bul,
@@ -25,6 +26,10 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
     @client.on(events.NewMessage(chats=config.KAYNAK_KANALLAR))
     async def _dinle(event):
         try:
+            # Duraklatma kontrolü
+            if state.durduruldu:
+                return
+
             ham = markdown_temizle(event.message.text or "")
 
             # Kara liste
@@ -82,15 +87,12 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             fs = firsat_skoru(ham, indirim, btn_links)
             lnk = link_bul(ham, btn_links)
 
-            if kuyruk.full():
-                try:
-                    kuyruk.get_nowait()
-                    log("UYARI", "Kuyruk doldu, en eski mesaj çıkarıldı")
-                except Exception:
-                    pass
-
-            await kuyruk.put((sablon, gorsel, lnk, magaza, kat, kanal_adi, indirim, fs))
-            log("BILGI", f"Kuyruğa eklendi [{magaza}] %{indirim} | kuyruk={kuyruk.qsize()}")
+            # FIX: put_nowait + QueueFull — bloklamaz, güvenli
+            try:
+                kuyruk.put_nowait((sablon, gorsel, lnk, magaza, kat, kanal_adi, indirim, fs))
+                log("BILGI", f"Kuyruğa eklendi [{magaza}] %{indirim} | kuyruk={kuyruk.qsize()}")
+            except asyncio.QueueFull:
+                log("UYARI", f"Kuyruk dolu ({kuyruk.maxsize}), mesaj atıldı [{magaza}] %{indirim}")
 
         except Exception as e:
             log("HATA", f"{type(e).__name__}: {e}")
