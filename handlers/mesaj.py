@@ -37,6 +37,8 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
 
     if not lnk:
         log("FILTRE", f"Link yok → atlandı: '{onizleme}…'")
+        if btn_links:
+            log("FILTRE", f"  Mevcut buton linkleri ({len(btn_links)}): {btn_links}")
         return None
 
     from services.analiz import urun_adi_bul
@@ -88,16 +90,53 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
 
             ham = markdown_temizle(event.message.text or "")
 
-            # Buton linklerini topla
+            # Buton linklerini topla — birkaç farklı yoldan dene
             btn_links: list[str] = []
             try:
+                # 1) En yaygın: event.message.buttons (Telethon high-level)
                 if event.message.buttons:
                     for row in event.message.buttons:
                         for btn in row:
-                            if hasattr(btn, "url") and btn.url:
-                                btn_links.append(btn.url)
-            except Exception:
-                pass
+                            url = getattr(btn, "url", None)
+                            if url:
+                                btn_links.append(url)
+            except Exception as e:
+                log("UYARI", f"event.message.buttons hatası: {e}")
+
+            # 2) Fallback: doğrudan reply_markup içine bak
+            try:
+                if not btn_links and event.message.reply_markup:
+                    rm = event.message.reply_markup
+                    rows = getattr(rm, "rows", None) or []
+                    for row in rows:
+                        for btn in getattr(row, "buttons", []) or []:
+                            url = getattr(btn, "url", None)
+                            if url:
+                                btn_links.append(url)
+            except Exception as e:
+                log("UYARI", f"reply_markup parse hatası: {e}")
+
+            # 3) Fallback: mesajdaki entities (gizli link/text_link)
+            try:
+                from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl
+                for ent in event.message.entities or []:
+                    if isinstance(ent, MessageEntityTextUrl) and ent.url:
+                        btn_links.append(ent.url)
+                    elif isinstance(ent, MessageEntityUrl):
+                        # Mesaj metninden URL'i kes
+                        text = event.message.text or ""
+                        url = text[ent.offset:ent.offset + ent.length]
+                        if url.startswith("http"):
+                            btn_links.append(url)
+            except Exception as e:
+                log("UYARI", f"entities parse hatası: {e}")
+
+            # Tekrarları temizle, sırasını koru
+            seen = set()
+            btn_links = [x for x in btn_links if not (x in seen or seen.add(x))]
+
+            if btn_links:
+                log("BILGI", f"Mesajdan {len(btn_links)} link toplandı: {btn_links[0][:60]}…")
 
             gorsel = (
                 event.message.media
