@@ -17,30 +17,65 @@ from services.analiz import (
     mesaj_bolum_ayir,
 )
 from services.sablon import olustur as sablon_olustur, olustur_coklu
+from services import llm
 from schedulers.gunluk import ekle as gunluk_ekle
 from utils.cache import gorulmus_var_mi, gorulmus_ekle
 from utils.log import log
 
 
 def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
-    """Bir bloğu analiz edip dict döner; geçersizse None."""
+    """Bir bloğu analiz edip dict döner; geçersizse None.
+    Regex zayıf kalırsa (link var ama indirim/ürün adı bulunamamış) LLM fallback dener."""
+    onizleme = blok[:50].replace("\n", " ")
+
     if any(yasak in blok.lower() for yasak in config.KARA_LISTE):
+        log("FILTRE", f"Kara liste → atlandı: '{onizleme}…'")
         return None
+
     indirim = indirim_oranini_bul(blok)
-    if indirim < config.MIN_INDIRIM:
-        return None
     lnk = link_bul(blok, btn_links)
+
     if not lnk:
+        log("FILTRE", f"Link yok → atlandı: '{onizleme}…'")
         return None
+
+    from services.analiz import urun_adi_bul
+    urun = urun_adi_bul(blok)
+
+    # ── LLM fallback ────────────────────────────────────────────
+    # Link var ama indirim eksik veya ürün adı eksik → LLM'e sor
+    if llm.aktif_mi() and (indirim < config.MIN_INDIRIM or not urun):
+        # Tekrar dene LLM ile
+        log("BILGI", f"Regex zayıf, LLM deneniyor: '{onizleme}…'")
+        llm_sonuc = llm.parse_et(blok)
+        if llm_sonuc:
+            yeni_ind = int(llm_sonuc.get("indirim_yuzdesi") or 0)
+            yeni_urun = llm_sonuc.get("urun_adi")
+            if yeni_ind > indirim:
+                indirim = yeni_ind
+            if not urun and yeni_urun:
+                urun = yeni_urun
+
+    if indirim < config.MIN_INDIRIM:
+        log("FILTRE", f"İndirim %{indirim} < {config.MIN_INDIRIM} → atlandı: '{onizleme}…'")
+        return None
+
+    if not urun:
+        log("FILTRE", f"Ürün adı çıkarılamadı → atlandı: '{onizleme}…'")
+        return None
+
     skor = kalite_skoru(blok, indirim, btn_links)
     if skor < config.MIN_KALITE:
+        log("FILTRE", f"Kalite {skor} < {config.MIN_KALITE} → atlandı: '{onizleme}…'")
         return None
+
     magaza = magaza_bul(blok, lnk)
     kat, _, _ = kategori_bul(blok)
     fs = firsat_skoru(blok, indirim, btn_links)
     return {
         "blok": blok, "indirim": indirim, "link": lnk,
         "magaza": magaza, "kat": kat, "skor": skor, "fs": fs,
+        "urun_llm": urun if not urun_adi_bul(blok) else None,   # LLM'den geldiyse sablon'a aktarılabilir
     }
 
 

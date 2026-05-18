@@ -19,7 +19,7 @@ from telethon import TelegramClient, events
 import config
 import state
 from utils.cache import ist_yukle, gorulmus_temizle
-from utils.log import log
+from utils.log import log, simdi_tr
 
 _YARDIM = (
     "📋 <b>Admin Komutları</b>\n\n"
@@ -43,7 +43,7 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/durum":
             ist = ist_yukle()
-            bugun = datetime.now().strftime("%Y-%m-%d")
+            bugun = simdi_tr().strftime("%Y-%m-%d")
             ikon = "⏸" if state.durduruldu else "✅"
             durum = "Duraklatıldı" if state.durduruldu else "Aktif"
             await event.reply(
