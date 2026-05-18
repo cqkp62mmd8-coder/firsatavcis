@@ -9,6 +9,7 @@ from telethon import TelegramClient
 
 import config
 import client as tg
+from utils import cache
 from utils.log import log
 from watchdog import admin_bildir, kanal_dogrula, calistir as watchdog_calistir
 from handlers import mesaj as mesaj_handler, callback as callback_handler
@@ -112,6 +113,10 @@ async def main() -> None:
 
             # Kanal doğrulama & handler kaydı
             config.KAYNAK_KANALLAR[:] = await kanal_dogrula(tg.client)
+
+            # İstatistiği Telegram'dan yükle (kalıcılık)
+            await cache.telegram_yukle(tg.client)
+
             mesaj_handler.kaydet(tg.client, kuyruk)
             admin_handler.kaydet(tg.client, kuyruk, tg.bot_client)   # Admin komutları
 
@@ -119,7 +124,8 @@ async def main() -> None:
                 tg.client,
                 f"🚀 Bot Başladı v9\n"
                 f"Kanal: {len(config.KAYNAK_KANALLAR)}\n"
-                f"Min indirim: %{config.MIN_INDIRIM}\n\n"
+                f"Min indirim: %{config.MIN_INDIRIM}\n"
+                f"Toplam istatistik: {cache.ist_yukle().get('toplam', 0)} fırsat\n\n"
                 f"Admin komutları için /yardim yaz.",
             )
 
@@ -133,6 +139,7 @@ async def main() -> None:
                 gunluk.zamanlayici(tg.client),
                 surpriz.zamanlayici(tg.client),
                 haftalik.zamanlayici(tg.client),
+                cache.periyodik_kaydet(600),   # 10 dk'da bir Telegram'a kaydet
             ]:
                 asyncio.ensure_future(coro)
 
