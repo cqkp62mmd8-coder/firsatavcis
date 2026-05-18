@@ -9,13 +9,13 @@ from telethon import TelegramClient
 import config
 from services.kuyruk import tepki_ekle
 from utils.cache import ist_yukle
-from utils.log import log
+from utils.log import log, simdi_tr
 
 
 async def gonder(client: TelegramClient) -> None:
     # FIX: ist_kaydet() burada gereksizdi — veri değiştirilmeden kaydediliyordu
     ist = ist_yukle()
-    simdi = datetime.now()
+    simdi = simdi_tr()
     haftalik = sum(
         ist.get("gunluk", {}).get((simdi - timedelta(days=i)).strftime("%Y-%m-%d"), 0)
         for i in range(7)
@@ -47,7 +47,7 @@ async def gonder(client: TelegramClient) -> None:
 
 async def zamanlayici(client: TelegramClient) -> None:
     while True:
-        simdi = datetime.now()
+        simdi = simdi_tr()
         gunler = (6 - simdi.weekday()) % 7
         if gunler == 0 and simdi.hour >= 20:
             gunler = 7

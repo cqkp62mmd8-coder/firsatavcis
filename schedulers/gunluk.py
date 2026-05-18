@@ -13,7 +13,7 @@ from services.analiz import (
     firsat_skoru, firsat_yildiz, indirim_yildiz, stok_kritik_mi,
 )
 from services.kuyruk import tepki_ekle
-from utils.log import log
+from utils.log import log, simdi_tr
 
 # Bellek içi günlük liste (en fazla 20 kayıt)
 _urunler: list[dict] = []
@@ -111,7 +111,7 @@ async def gonder(client: TelegramClient) -> None:
 
 async def zamanlayici(client: TelegramClient) -> None:
     while True:
-        simdi = datetime.now()
+        simdi = simdi_tr()
         hedef = simdi.replace(hour=21, minute=0, second=0, microsecond=0)
         if simdi >= hedef:
             hedef += timedelta(days=1)

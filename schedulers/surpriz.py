@@ -11,7 +11,7 @@ import config
 from services.analiz import kategori_bul
 from services.kuyruk import tepki_ekle
 from schedulers.gunluk import liste
-from utils.log import log
+from utils.log import log, simdi_tr
 
 
 async def gonder(client: TelegramClient) -> None:
@@ -45,7 +45,7 @@ async def gonder(client: TelegramClient) -> None:
 
 async def zamanlayici(client: TelegramClient) -> None:
     while True:
-        simdi = datetime.now()
+        simdi = simdi_tr()
         hedef = simdi.replace(
             hour=random.randint(12, 19),
             minute=random.randint(0, 59),
