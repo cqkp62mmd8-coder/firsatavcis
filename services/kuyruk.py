@@ -1,5 +1,6 @@
 """
-Kuyruk worker: kuyruktaki mesajları 3 dakika arayla kanala gönderir.
+Kuyruk worker: kuyruktaki mesajları bekleyerek kanala gönderir.
+lnk: str (tek ürün) veya list[tuple[str,str]] (çift ürün → 2 inline buton)
 """
 import asyncio
 from io import BytesIO
@@ -32,26 +33,46 @@ async def tepki_ekle(client: TelegramClient, mesaj) -> None:
 
 # ── Buton fabrikası ─────────────────────────────────────────────
 
-def _buton_olustur(link: str, bot_client_var: bool):
+def _buton_olustur(link, bot_client_var: bool):
+    """link: str (tek) veya list[tuple[url, ad]] (çift ürün)."""
     from telethon.tl.types import (
         KeyboardButtonUrl, KeyboardButtonCallback,
         KeyboardButtonRow, ReplyInlineMarkup,
     )
-    if bot_client_var:
-        return ReplyInlineMarkup(rows=[KeyboardButtonRow(buttons=[
-            KeyboardButtonUrl(text="🔗 Fırsata Git",    url=link),
-            KeyboardButtonCallback(text="🔥 Kaçmaz Fırsat", data=b"vote_good"),
-            KeyboardButtonCallback(text="❌ Sahte İndirim", data=b"vote_fake"),
-        ])])
-    return ReplyInlineMarkup(rows=[KeyboardButtonRow(buttons=[
-        KeyboardButtonUrl(text="🔗 Fırsata Git", url=link),
-    ])])
+
+    satirlar = []
+
+    if isinstance(link, list):
+        # Çift ürün — her ürün için ayrı satır
+        for url, ad in link:
+            if url:
+                satirlar.append(KeyboardButtonRow(buttons=[
+                    KeyboardButtonUrl(text=f"🔗 {ad}", url=url),
+                ]))
+        if bot_client_var:
+            satirlar.append(KeyboardButtonRow(buttons=[
+                KeyboardButtonCallback(text="🔥 Kaçmaz Fırsat", data=b"vote_good"),
+                KeyboardButtonCallback(text="❌ Sahte İndirim",  data=b"vote_fake"),
+            ]))
+    else:
+        # Tek ürün
+        if bot_client_var:
+            satirlar.append(KeyboardButtonRow(buttons=[
+                KeyboardButtonUrl(text="🔗 Fırsata Git",    url=link),
+                KeyboardButtonCallback(text="🔥 Kaçmaz Fırsat", data=b"vote_good"),
+                KeyboardButtonCallback(text="❌ Sahte İndirim",  data=b"vote_fake"),
+            ]))
+        else:
+            satirlar.append(KeyboardButtonRow(buttons=[
+                KeyboardButtonUrl(text="🔗 Fırsata Git", url=link),
+            ]))
+
+    return ReplyInlineMarkup(rows=satirlar) if satirlar else None
 
 
 # ── Gönderim (retry destekli) ───────────────────────────────────
 
 async def _gonder_retry(gonderi_client, hedef, metin, **kw):
-    """Exponential backoff ile en fazla _MAX_RETRY kez dener."""
     son_hata = None
     for attempt in range(_MAX_RETRY):
         try:
@@ -59,7 +80,7 @@ async def _gonder_retry(gonderi_client, hedef, metin, **kw):
         except Exception as e:
             son_hata = e
             if attempt < _MAX_RETRY - 1:
-                bekle = 5 * (2 ** attempt)   # 5 → 10 → 20 sn
+                bekle = 5 * (2 ** attempt)
                 log("UYARI", f"Gönderim hatası ({attempt+1}/{_MAX_RETRY}): {e} — {bekle}s bekleniyor")
                 await asyncio.sleep(bekle)
     raise son_hata
@@ -79,8 +100,6 @@ async def worker(
             sablon, gorsel_medya, link, magaza, kat, kanal_adi, indirim = veri[:7]
             fs_skor = veri[7] if len(veri) > 7 else 0.0
 
-            # FIX: Duraklatma kontrolü mesaj alındıktan sonra yapılır;
-            # mesajı atmak yerine kısa bekleyip tekrar deneriz.
             while state.durduruldu:
                 log("BILGI", "Bot duraklatıldı — worker bekliyor…")
                 await asyncio.sleep(15)
@@ -90,12 +109,22 @@ async def worker(
                 log("BILGI", "Gece modu – sessiz bildirim")
 
             buton = _buton_olustur(link, bool(bot_client)) if link else None
-            metin = sablon if buton else (sablon + f"\n\n🔗 <a href='{link}'>Fırsata Git</a>" if link else sablon)
 
-            # ── Gönder ──────────────────────────────────────────
-            msg = None
+            # Metin + link: buton varsa sadece sablon, yoksa link satırı ekle
+            if buton:
+                metin = sablon
+            elif isinstance(link, list):
+                ekler = "\n".join(f"🔗 <a href='{u}'>{ad}</a>" for u, ad in link if u)
+                metin = sablon + "\n\n" + ekler if ekler else sablon
+            elif link:
+                metin = sablon + f"\n\n🔗 <a href='{link}'>Fırsata Git</a>"
+            else:
+                metin = sablon
+
             gonderi_client = bot_client if (bot_client and link) else client
 
+            # ── Görsel ile gönder ────────────────────────────────
+            msg = None
             if gorsel_medya:
                 try:
                     raw = await client.download_media(gorsel_medya, bytes)
@@ -122,7 +151,6 @@ async def worker(
             if msg:
                 await tepki_ekle(client, msg)
 
-            # Yüksek skor → sabitle
             if msg and fs_skor >= 9.0:
                 try:
                     await client.pin_message(config.HEDEF_KANAL, msg.id, notify=False)

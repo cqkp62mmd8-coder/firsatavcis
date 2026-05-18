@@ -159,20 +159,42 @@ def indirim_oranini_bul(metin: str) -> int:
     if degerler:
         return max(degerler)
 
-    # 4. "X₺ Kuponla Y₺" — gerçek oranı hesapla
+    # 4. "X₺ Kuponla Y₺" — gerçek oranı hesapla  (ör: 900₺ Kuponla 15.099₺)
     kupon_fmt = re.findall(r"([\d.,]+)\s*₺\s*[Kk]upon\w*\s+([\d.,]+)\s*₺", metin)
     for k_s, f_s in kupon_fmt:
         kv, fv = _parse(k_s), _parse(f_s)
         if kv > 0 and fv > 0 and fv > kv:
             oran = round(kv / (fv + kv) * 100)
-            # Büyük TL kuponu (ör. 900₺) MIN_INDIRIM eşiğini garantilemek için
             if kv >= config.KUPON_MIN_TL:
                 return max(oran, config.MIN_INDIRIM)
             return max(oran, 1)
 
-    # Sepette indirim (miktar bilinmiyor)
+    # 4b. "X₺ Kuponla Adedi Y₺" — adet fiyatı + kupon (ör: 100₺ Kuponla Adedi 67₺)
+    adedi_fmt = re.findall(r"([\d.,]+)\s*₺\s*[Kk]upon\w*\s+[Aa]dedi\s*([\d.,]+)\s*₺", metin)
+    for k_s, a_s in adedi_fmt:
+        kv, av = _parse(k_s), _parse(a_s)
+        if kv > 0 and av > 0:
+            normal = av + kv
+            oran = round(kv / normal * 100)
+            if 1 <= oran <= 99:
+                return oran
+
+    # 4c. "X TL'ye Düştü - Piyasası Y TL" — fiyat düşüşü
+    duzeltme = re.findall(r"([\d.,]+)\s*tl.*?düştü.*?piyasa[^\d]*([\d.,]+)\s*tl", ml)
+    for yeni_s, eski_s in duzeltme:
+        yv, ev = _parse(yeni_s), _parse(eski_s)
+        if ev > yv > 0:
+            oran = round((ev - yv) / ev * 100)
+            if 1 <= oran <= 99:
+                return oran
+
+    # 4d. Sepette indirim (miktar bilinmiyor)
     if re.search(r"sepette\s*[\d.,]+\s*tl|sepete\s*\d+\s*adet", ml):
         return 30
+
+    # 4e. Kupon kodu varsa (ör: "final150 Kodu İle")
+    if re.search(r"\b[A-Za-z0-9]{4,20}\s+[Kk]odu\b", metin):
+        return config.MIN_INDIRIM
 
     # 5. Stok uyarısı + fiyat birlikteliği
     stok_kelime = {"stoklar eriyor", "son stok", "dip fiyat", "en düşük", "kaçmaz", "hemen yakala"}
@@ -214,7 +236,7 @@ def fiyat_bul(metin: str) -> tuple[str | None, str | None, float, float]:
     if not metin:
         return None, None, 0, 0
 
-    # 1. 'X₺ Kuponla Y₺' özel formatı  (ör: '900₺ Kuponla 15.099₺')
+    # 1. 'X₺ Kuponla Y₺' → normal = X+Y, indirimli = Y
     kupon_fmt = re.findall(r"([\d.,]+)\s*₺\s*[Kk]upon\w*\s+([\d.,]+)\s*₺", metin)
     if kupon_fmt:
         kv = _parse(kupon_fmt[0][0])
@@ -224,15 +246,33 @@ def fiyat_bul(metin: str) -> tuple[str | None, str | None, float, float]:
             eski_s = f"{int(eski_v):,}".replace(",", ".")
             return eski_s, kupon_fmt[0][1], eski_v, fv
 
-    # 2. Etiketli format
+    # 1b. 'X₺ Kuponla Adedi Y₺' → normal = X+Y, indirimli = Y
+    adedi_fmt = re.findall(r"([\d.,]+)\s*₺\s*[Kk]upon\w*\s+[Aa]dedi\s*([\d.,]+)\s*₺", metin)
+    if adedi_fmt:
+        kv = _parse(adedi_fmt[0][0])
+        av = _parse(adedi_fmt[0][1])
+        if kv > 0 and av > 0:
+            eski_v = av + kv
+            eski_s = f"{int(eski_v):,}".replace(",", ".")
+            return eski_s, adedi_fmt[0][1], eski_v, av
+
+    # 2. Etiketli format: "İndirimli Fiyat / Normal Fiyat"
     ind = re.findall(r"(?:indirimli\s*fiyat|sale\s*price)\s*[:\-]?\s*[₺$€]?\s*([\d.,]+)", metin, re.I)
-    nor = re.findall(r"(?:normal\s*fiyat|liste\s*fiyat|piyasa)\s*[:\-]?\s*[₺$€]?\s*([\d.,]+)", metin, re.I)
+    nor = re.findall(r"(?:normal\s*fiyat|liste\s*fiyat|piyasa\s*fiyat)\s*[:\-]?\s*[₺$€]?\s*([\d.,]+)", metin, re.I)
     if ind and nor:
         yv, ev = _parse(ind[0]), _parse(nor[0])
         if ev > yv > 0:
             return nor[0], ind[0], ev, yv
 
-    # 3. ₺ ve TL
+    # 3. "X TL'ye Düştü - Piyasası Y TL" → yeni=X, eski=Y
+    ml = metin.lower()
+    duzeltme = re.findall(r"([\d.,]+)\s*tl.*?düştü.*?piyasa[^\d]*([\d.,]+)\s*tl", ml)
+    if duzeltme:
+        yv, ev = _parse(duzeltme[0][0]), _parse(duzeltme[0][1])
+        if ev > yv > 0:
+            return duzeltme[0][1], duzeltme[0][0], ev, yv
+
+    # 4. ₺ ve TL fiyatları — en yüksek=eski, en düşük=yeni
     bulunan = re.findall(r"₺\s*([\d.,]+)", metin) + re.findall(r"([\d.,]+)\s*(?:TL|tl|lira)", metin)
     degerler = [((_parse(f), f)) for f in bulunan if _parse(f) > 0]
     if len(degerler) >= 2:
@@ -300,12 +340,15 @@ def indirim_turu(metin: str) -> str:
 def urun_adi_bul(metin: str) -> str | None:
     if not metin:
         return None
+    _ATLA = {"linkteki", "sepette", "kampanya", "devam ediyor", "firsata git",
+              "fırsata git", "google'da", "karşılaştır", "stokta var", "hemen yakala"}
     for satir in (s.strip() for s in metin.split("\n") if s.strip()):
         if satir.startswith(("#", "@")) or "http" in satir:
             continue
+        if any(k in satir.lower() for k in _ATLA):
+            continue
 
         aday = satir
-        # Sondaki fiyat/kupon kısmını sil: '900₺ Kuponla 15.099₺' | '1.299 TL' | '%66'
         aday = re.sub(r"\s+[\d.,]+\s*₺.*$", "", aday).strip()
         aday = re.sub(r"\s+[\d.,]+\s*(?:TL|tl|lira).*$", "", aday).strip()
         aday = re.sub(r"\s+%\d+.*$", "", aday).strip()
@@ -383,8 +426,12 @@ def link_bul(metin: str, buton_linkleri: list[str] | None = None) -> str | None:
 
 
 def kupon_bul(metin: str) -> str | None:
-    for kalip in [r"kupon\s*[:\-]?\s*([A-Z0-9]{4,20})", r"indirim\s*kodu?\s*[:\-]?\s*([A-Z0-9]{4,20})"]:
-        eslesme = re.findall(kalip, metin or "", re.I)
+    for kalip in [
+        r"kupon\s*[:\-]?\s*([A-Za-z0-9]{4,20})",
+        r"indirim\s*kodu?\s*[:\-]?\s*([A-Za-z0-9]{4,20})",
+        r"\b([A-Za-z0-9]{4,20})\s+[Kk]odu\b",   # "final150 Kodu" formatı
+    ]:
+        eslesme = re.findall(kalip, metin or "")
         if eslesme:
             return eslesme[0].upper()
     return None
@@ -476,38 +523,55 @@ def indirim_yildiz(indirim: int) -> str:
 # ════════════════════════════════════════════════════════════════
 
 def mesaj_bolum_ayir(metin: str) -> list[str]:
-    """Tek mesajda birden fazla ürün varsa ayrı bloklara böler.
-    Her bloka paylaşılan link/hashtag satırları eklenir.
-    Tek ürünlüyse [metin] döner.
-
-    Örnek girdi:
-        🔥 Ürün A  900₺ Kuponla 15.099₺
-        🔥 Ürün B  900₺ Kuponla 14.099₺
-        🛒 https://...
-        #işbirliği
-    → ['🔥 Ürün A...\n🛒 https://...\n#...', '🔥 Ürün B...\n🛒 https://...\n#...']
+    """Tek mesajda birden fazla ürün varsa en fazla 2 bloğa böler.
+    Önce boş satır, bulamazsa satır-başı ürün emojisiyle bölmeye çalışır.
+    Her bloğa paylaşılan link/hashtag satırları eklenir.
     """
     if not metin:
         return [metin]
 
-    parcalar = [p.strip() for p in re.split(r"\n\s*\n", metin.strip()) if p.strip()]
-
+    # ── Yardımcı ────────────────────────────────────────────────
     def _paylasilan_mi(blok: str) -> bool:
-        """Sadece link / hashtag / 🛒 satırı içeren bloğu paylaşılan say."""
         return all(
             s.startswith("#") or s.startswith("http") or s.startswith("🛒") or not s.strip()
             for s in blok.split("\n")
         )
 
+    def _link_iceriyor_mu(blok: str) -> bool:
+        return bool(re.search(r"https?://|hb\.biz|ty\.gl|sl\.n11", blok))
+
+    # ── 1. Önce boş satırla bölmeyi dene ────────────────────────
+    parcalar = [p.strip() for p in re.split(r"\n\s*\n", metin.strip()) if p.strip()]
     urun_bloklari = [p for p in parcalar if not _paylasilan_mi(p)]
     paylasilan    = [p for p in parcalar if _paylasilan_mi(p)]
 
+    # ── 2. Boş satırla bölünemediyse emoji satır bölücü ─────────
     if len(urun_bloklari) <= 1:
-        return [metin]   # Tek ürün — değiştirme
+        # Sadece 🔥 ve 🔻 ürün başlangıcı sayılır (⚡💰📦 fiyat satırları — aynı ürün)
+        emoji_pat = re.compile(r"\n(?=[🔥🔻])")
+        parcalar2 = emoji_pat.split(metin.strip())
+        urun_bloklari2 = [p.strip() for p in parcalar2 if p.strip() and not _paylasilan_mi(p)]
+        if len(urun_bloklari2) > 1:
+            urun_bloklari = urun_bloklari2
+
+    if len(urun_bloklari) <= 1:
+        return [metin]
+
+    # En fazla 2 ürün
+    urun_bloklari = urun_bloklari[:2]
 
     paylasilan_metin = "\n\n".join(paylasilan)
     sonuc = []
     for blok in urun_bloklari:
-        tam = (blok + "\n\n" + paylasilan_metin).strip() if paylasilan_metin else blok
+        # Blokta link yoksa paylaşılan metinden link ekle
+        if not _link_iceriyor_mu(blok) and paylasilan_metin:
+            tam = (blok + "\n\n" + paylasilan_metin).strip()
+        elif paylasilan_metin and not _link_iceriyor_mu(blok):
+            tam = (blok + "\n\n" + paylasilan_metin).strip()
+        else:
+            tam = blok
+            if paylasilan_metin:
+                tam = (blok + "\n\n" + paylasilan_metin).strip()
         sonuc.append(tam)
     return sonuc
+
