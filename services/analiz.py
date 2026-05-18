@@ -409,14 +409,22 @@ def urun_adi_bul(metin: str) -> str | None:
 _KISALTILMIS = {"ty.gl", "hb.biz", "hb.gl", "sl.n11.com", "amzn.to"}
 
 _REF_PARAMS = {
+    # UTM
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    # Genel affiliate / tracking
     "ref", "referral", "aff", "affiliate", "partner", "src", "source",
     "fbclid", "gclid", "msclkid", "yclid", "_ga", "trk", "mc_eid",
-    "tag", "linkcode", "linkid", "ref_",
+    "campaign", "creative", "channel", "campaign_id",
+    # Amazon affiliate
+    "tag", "linkcode", "linkid", "ref_", "ascsubtag", "smid",
     "pf_rd_p", "pf_rd_r", "pd_rd_r", "pd_rd_w", "pd_rd_wg",
     "pf_rd_s", "pf_rd_t", "pf_rd_i",
+    # Trendyol tracking
     "boutiqueid", "merchantid", "sav", "pi", "filteredsearchvalues",
-    "magaza", "searchterm",
+    # HepsiBurada
+    "magaza", "wt_mc",
+    # N11
+    "searchterm",
 }
 
 
@@ -440,23 +448,30 @@ def link_bul(metin: str, buton_linkleri: list[str] | None = None) -> str | None:
         "teknosa.com", "ty.gl", "hb.gl", "n11.com", "ciceksepeti.com",
         "aliexpress.com", "sl.n11.com", "hb.biz", "amzn.to",
     ]
-    gizli = {"google.com", "t.me"}
+    # Reddedilecekler — arama motorları + Telegram
+    gizli = ("google.com/search", "bing.com/search", "duckduckgo.com", "t.me/")
+
+    def _kabul(url: str) -> bool:
+        ul = url.lower()
+        if any(g in ul for g in gizli):
+            return False
+        return True
 
     if buton_linkleri:
         for bl in buton_linkleri:
-            if any(p in bl for p in oncelik):
+            if _kabul(bl) and any(p in bl.lower() for p in oncelik):
                 return link_temizle(bl)
         for bl in buton_linkleri:
-            if not any(g in bl for g in gizli):
+            if _kabul(bl):
                 return link_temizle(bl)
 
     if metin:
         linkler = re.findall(r'https?://[^\s\)\"\<\]\,]+', metin)
         for lnk in linkler:
-            if any(p in lnk for p in oncelik):
+            if _kabul(lnk) and any(p in lnk.lower() for p in oncelik):
                 return link_temizle(lnk)
         for lnk in linkler:
-            if not any(g in lnk for g in gizli):
+            if _kabul(lnk):
                 return link_temizle(lnk)
     return None
 

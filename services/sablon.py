@@ -3,8 +3,6 @@ Telegram HTML şablonu: ham mesajı kanalda paylaşılacak metne dönüştürür
 olustur()       → tek ürün
 olustur_coklu() → 2 ürün tek mesajda
 """
-from datetime import datetime
-
 import config
 from services.analiz import (
     magaza_bul, urun_adi_bul, fiyat_bul, link_bul,
@@ -12,6 +10,7 @@ from services.analiz import (
     kupon_bul, min_siparis_bul, sahte_indirim_mi,
     firsat_skoru, firsat_yildiz, indirim_yildiz,
 )
+from utils.log import simdi_tr
 
 
 # ── Yardımcılar ─────────────────────────────────────────────────
