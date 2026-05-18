@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timezone
 
 import config
-from utils.log import log
+from utils.log import log, simdi_tr
 
 # ── İç durum ────────────────────────────────────────────────────
 _gorulmus: dict[str, float] | None = None
@@ -197,11 +197,12 @@ def ist_kaydet() -> None:
     if _istatistik is None:
         return
     _disk_kaydet()
-    # Async Telegram kaydını fire-and-forget tetikle
+    # Async Telegram kaydını fire-and-forget tetikle (event loop varsa)
     try:
-        asyncio.get_event_loop().create_task(_telegram_kaydet())
+        loop = asyncio.get_running_loop()
+        loop.create_task(_telegram_kaydet())
     except RuntimeError:
-        pass   # event loop yoksa sessizce geç
+        pass   # event loop dışında, sessizce geç
 
 
 def ist_guncelle(kanal: str, magaza: str, kategori: str) -> None:
@@ -211,7 +212,7 @@ def ist_guncelle(kanal: str, magaza: str, kategori: str) -> None:
     ist["kanallar"][kanal]       = ist["kanallar"].get(kanal, 0) + 1
     ist["magazalar"][magaza]     = ist["magazalar"].get(magaza, 0) + 1
     ist["kategoriler"][kategori] = ist["kategoriler"].get(kategori, 0) + 1
-    bugun = datetime.now().strftime("%Y-%m-%d")
+    bugun = simdi_tr().strftime("%Y-%m-%d")
     ist["gunluk"][bugun] = ist["gunluk"].get(bugun, 0) + 1
     _ist_degisim += 1
     if _ist_degisim >= 5:           # Her 5 güncellemede bir kalıcılaştır
