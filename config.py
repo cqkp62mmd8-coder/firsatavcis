@@ -26,7 +26,7 @@ LOGO_DOSYA       = "logo.PNG"
 GORULMUS_MAX     = 3_000
 GORULMUS_TTL     = 7 * 24 * 3_600   # saniye
 WATCHDOG_ARALIK  = 3_600             # saniye
-MARKA_SPAM_LIMIT = 3
+MARKA_SPAM_LIMIT = int(os.environ.get("MARKA_SPAM_LIMIT", "999"))   # 999 = pratik olarak devre dışı
 MARKA_SPAM_SURE  = 3_600            # saniye
 KUPON_MIN_TL     = int(os.environ.get("KUPON_MIN_TL", "500"))  # Bu TL'nin üstündeki kuponlar geçer
 

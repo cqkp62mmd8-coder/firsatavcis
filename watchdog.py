@@ -9,7 +9,7 @@ from telethon import TelegramClient
 
 import config
 from utils.cache import ist_yukle, ist_kaydet, gorulmus_temizle
-from utils.log import log
+from utils.log import log, simdi_tr
 
 
 async def admin_bildir(client: TelegramClient, mesaj: str) -> None:
@@ -40,7 +40,7 @@ async def calistir(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
     while True:
         await asyncio.sleep(config.WATCHDOG_ARALIK)
         ist = ist_yukle()
-        bugun = datetime.now().strftime("%Y-%m-%d")
+        bugun = simdi_tr().strftime("%Y-%m-%d")
         await admin_bildir(
             client,
             f"✅ Bot çalışıyor\n"

@@ -132,16 +132,25 @@ async def main() -> None:
             if config.TEST_MODE:
                 await _test_gonder(kuyruk)
 
-            # Arka plan görevleri
-            for coro in [
-                kuyruk_worker(tg.client, tg.bot_client, kuyruk),
-                watchdog_calistir(tg.client, kuyruk),
-                gunluk.zamanlayici(tg.client),
-                surpriz.zamanlayici(tg.client),
-                haftalik.zamanlayici(tg.client),
-                cache.periyodik_kaydet(600),   # 10 dk'da bir Telegram'a kaydet
+            # Arka plan görevleri — patlasalar bile log'lansınlar
+            def _gorev_bitti(task):
+                if task.cancelled():
+                    return
+                exc = task.exception()
+                if exc is not None:
+                    log("KRITIK", f"Arka plan görevi öldü: {type(exc).__name__}: {exc}")
+
+            for coro, ad in [
+                (kuyruk_worker(tg.client, tg.bot_client, kuyruk), "kuyruk_worker"),
+                (watchdog_calistir(tg.client, kuyruk), "watchdog"),
+                (gunluk.zamanlayici(tg.client), "gunluk"),
+                (surpriz.zamanlayici(tg.client), "surpriz"),
+                (haftalik.zamanlayici(tg.client), "haftalik"),
+                (cache.periyodik_kaydet(600), "cache_kaydet"),
             ]:
-                asyncio.ensure_future(coro)
+                t = asyncio.ensure_future(coro)
+                t.add_done_callback(_gorev_bitti)
+                log("BILGI", f"Arka plan görevi başlatıldı: {ad}")
 
             await tg.client.run_until_disconnected()
 
