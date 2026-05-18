@@ -7,8 +7,6 @@ import asyncio
 from io import BytesIO
 
 from telethon import TelegramClient
-from telethon.tl.functions.messages import SendReactionRequest
-from telethon.tl.types import ReactionEmoji
 
 import config
 import state
@@ -80,8 +78,10 @@ async def worker(
 ) -> None:
     log("BILGI", "Kuyruk worker başladı")
     while True:
+        alindi = False   # Bu döngüde kuyruk.get() çağrıldı mı?
         try:
             veri = await kuyruk.get()
+            alindi = True
             sablon, gorsel_medya, lnk_giris, magaza, kat, kanal_adi, indirim = veri[:7]
             fs_skor = veri[7] if len(veri) > 7 else 0.0
 
@@ -117,7 +117,7 @@ async def worker(
                     if not raw or len(raw) < 1_000:
                         raise ValueError("Görsel çok küçük")
                     buf = BytesIO(logo_ekle(raw))
-                    buf.name = "urun.jpg"
+                    buf.name = "urun.png"
                     kw = dict(file=buf, parse_mode="html", silent=sessiz)
                     if buton:
                         kw["buttons"] = buton
@@ -129,6 +129,7 @@ async def worker(
                         kw2["buttons"] = buton
                     msg = await _gonder_retry(gonderi_client, config.HEDEF_KANAL, metin, **kw2)
             else:
+                # Ürün görseli yok → düz metin gönder (logo eklenmez)
                 kw3 = dict(parse_mode="html")
                 if buton:
                     kw3["buttons"] = buton
@@ -137,7 +138,8 @@ async def worker(
             if msg:
                 await tepki_ekle(client, msg)
 
-            if msg and fs_skor >= 9.0:
+            # Yüksek skor → sabitle (pin)
+            if msg and fs_skor >= 7.0:
                 try:
                     await client.pin_message(config.HEDEF_KANAL, msg.id, notify=False)
                     log("OK", f"Sabitlendi (skor {fs_skor}/10)")
@@ -152,5 +154,10 @@ async def worker(
             await asyncio.sleep(config.KUYRUK_BEKLEME)
 
         except Exception as e:
-            log("HATA", f"Worker: {e}")
+            log("HATA", f"Worker: {type(e).__name__}: {e}")
+            if alindi:
+                try:
+                    kuyruk.task_done()
+                except ValueError:
+                    pass
             await asyncio.sleep(10)

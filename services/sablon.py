@@ -56,7 +56,7 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     min_sip      = min_siparis_bul(metin)
     m_emoji      = config.MAGAZA_EMOJI.get(magaza, "🛒")
     kat_yazi     = config.KATEGORI_YAZI.get(kat, "Alışveriş")
-    zaman        = datetime.now().strftime("%H:%M")
+    zaman        = simdi_tr().strftime("%H:%M")
     fs           = firsat_skoru(metin, indirim, btn_links)
     fs_y         = firsat_yildiz(fs)
     yildiz       = indirim_yildiz(indirim)

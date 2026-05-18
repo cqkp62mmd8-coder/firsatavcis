@@ -15,8 +15,11 @@ import config
 # ════════════════════════════════════════════════════════════════
 
 def emoji_temizle(metin: str) -> str:
+    """Emoji, sembol, variation selector ve zero-width karakterleri çıkarır."""
     if not metin:
         return ""
+    # Variation selectors (U+FE00–U+FE0F), zero-width joiner, BOM vs.
+    metin = re.sub(r"[\u200b-\u200f\u2060\ufe00-\ufe0f\ufeff]", "", metin)
     return "".join(
         k for k in metin if unicodedata.category(k) not in ("So", "Sm", "Sk")
     ).strip()
@@ -322,23 +325,34 @@ def urun_adi_bul(metin: str) -> str | None:
     satirlar = [s.strip() for s in metin.split("\n") if s.strip()]
 
     def _temizle(satir: str) -> str:
-        """Fiyat / yüzde / kupon kodu / link kısımlarını ayıkla, geriye temiz ürün adını bırak."""
+        """Fiyat / yüzde / kupon kodu / link kısımlarını ayıkla."""
         # URL'leri çıkar
         s = re.sub(r"https?://\S+", "", satir)
-        # Fiyat: 137₺, ₺1.599,99, 3.099TL, 650 TL
+        # Zero-width karakterler
+        s = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", s)
+        # Fiyat aralıkları: "1.000₺ - 1.300₺ arasında"
+        s = re.sub(r"[\d.,]+\s*₺\s*[-–—]\s*[\d.,]+\s*₺\s*aras[ıi]nda\b", "", s, flags=re.I)
+        s = re.sub(r"[\d.,]+\s*(?:TL|tl)\s*[-–—]\s*[\d.,]+\s*(?:TL|tl)\s*aras[ıi]nda\b", "", s, flags=re.I)
+        # "%X'a varan indirim var"
+        s = re.sub(r"%\s*\d+\s*['\u2019]?\s*[aeıi]\s*varan\s*indirim\s*var\b", "", s, flags=re.I)
+        s = re.sub(r"varan\s*indirim\s*var\b", "", s, flags=re.I)
+        s = re.sub(r"\bindirim\s+var\b", "", s, flags=re.I)
+        # Tek fiyat: 137₺, ₺1.599,99, 3.099TL, 650 TL
         s = re.sub(r"[\d.,]+\s*₺|₺\s*[\d.,]+|[\d.,]+\s*(?:TL|tl|lira)", "", s)
-        # Yüzde: %100, 50%
+        # Yüzde
         s = re.sub(r"%\s*\d+|\d+\s*%", "", s)
         # "X Adet Alımda" / "X Kuponla" / "kodu ile"
         s = re.sub(r"\b\d+\s*[Aa]det\s*[Aa]l[ıi]mda\b.*", "", s)
         s = re.sub(r"\b[A-Za-z0-9]{4,20}\s*[Kk]odu?\s*(?:ile|İle).*", "", s, flags=re.I)
         s = re.sub(r"\b[Kk]uponla\b.*", "", s)
         s = re.sub(r"\b\d+\s*[Aa]l\s*\d+\s*[ÖöOo]de\b", "", s)
-        # Bağlaçlar / artakalan filler kelimeler
+        # Bağlaçlar / filler
         s = re.sub(r"\b(?:yerine|ye geliyor|geliyor|düştü|fiyatı|piyasası|piyasa)\b", "", s, flags=re.I)
         # Emojileri sök, fazla boşluk + son nokta/tire'leri at
         s = emoji_temizle(s)
         s = re.sub(r"\s+", " ", s).strip(" -–—,.|").strip()
+        # Sondaki tek başına "var" / "ve" gibi takıları sil
+        s = re.sub(r"\s+(?:var|ve|ile)\s*$", "", s, flags=re.I).strip()
         return s
 
     # Öncelik 1: ürün başlık emoji'siyle başlayan satırlar (en ürünsel)
@@ -488,18 +502,41 @@ def kalite_skoru(metin: str, indirim: int, buton_linkleri: list[str]) -> int:
     if link_bul(metin, buton_linkleri): s += 20
     e, y, _, _ = fiyat_bul(metin)
     s += 20 if (e and y) else (10 if y else 0)
+    # Marka kampanyası ("%40'a varan", "tüm ürünlerde indirim") — fiyat eksikse bile değerli
+    if indirim_turu(metin) == "marka" or _MARKA_KAMPANYA_KALIP.search(metin or ""):
+        s += 10
     if urun_adi_bul(metin):   s += 15
     if stok_kritik_mi(metin): s += 5
     return s
 
 
+# Marka kampanyası kalıpları — "%X varan indirim", "tüm ürünlerde", "seçili ürünlerde"
+_MARKA_KAMPANYA_KALIP = re.compile(
+    r"%\s*\d+\s*['\u2019]?\s*[aeıi]\s*varan|"
+    r"varan\s*indirim|"
+    r"tüm\s+ürünlerde|"
+    r"seçili\s+ürünlerde|"
+    r"sepette\s*%",
+    re.I,
+)
+
+
 def sahte_indirim_mi(metin: str, indirim: int) -> bool:
-    if indirim < 75:
+    """Sahte indirim filtresi gevşetildi:
+    - %85 altı → güvenli kabul
+    - Güvenilir marka varsa → güvenli
+    - Açıkça eski+yeni fiyat varsa → güvenli (hesaplanabilir)
+    - Aksi halde %90+ olunca işaretle"""
+    if indirim < 85:
         return False
-    ml = metin.lower()
+    ml = (metin or "").lower()
     if any(m in ml for m in config.GUVENILIR_MARKALAR):
         return False
-    return indirim >= 88
+    # Hem eski hem yeni fiyat varsa, indirim doğrulanabilir → güvenli
+    e, y, _, _ = fiyat_bul(metin)
+    if e and y:
+        return False
+    return indirim >= 90
 
 
 def firsat_skoru(metin: str, indirim: int, buton_linkleri: list[str]) -> float:
@@ -565,6 +602,7 @@ def _paylasilan_mi(blok: str) -> bool:
 
 
 def _urun_paragrafi_mi(paragraf: str) -> bool:
+    """Paragraf gerçek bir ürün bilgisi mi içeriyor?"""
     p = paragraf.strip()
     if len(p) < 15:
         return False
@@ -575,7 +613,16 @@ def _urun_paragrafi_mi(paragraf: str) -> bool:
     if not fiyat_var:
         return False
     ilk_satir = p.split("\n")[0].strip()
-    return bool(re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", ilk_satir))
+    if not re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", ilk_satir):
+        return False
+    # Sadece kampanya açıklaması ise (somut fiyat yok, sadece %X varan / tüm ürünlerde)
+    # → ürün değil
+    somut_fiyat = bool(re.search(r"[\d.,]+\s*(?:tl|₺|lira)\b", p, re.I))
+    if not somut_fiyat:
+        # Sadece % var. Eğer "varan / tüm / seçili" gibi kampanya kelimeleri varsa, ürün değil
+        if re.search(r"varan|tüm\s+ürün|seçili\s+ürün|sepette\s+%|sepete\s+%", p, re.I):
+            return False
+    return True
 
 
 def _paragraf_ici_bol(paragraf: str) -> list[str]:
@@ -596,7 +643,10 @@ def _paragraf_ici_bol(paragraf: str) -> list[str]:
 def mesaj_bolum_ayir(metin: str) -> list[str]:
     """Tek mesajda birden fazla ürün varsa ayrı bloklara böler (max 2).
     Paylaşılan link/hashtag satırları her bloğa eklenir.
-    Tek ürünlüyse [metin] döner."""
+    Tek ürünlüyse [metin] döner.
+
+    Kural: "Ne ürün ne paylaşılan" paragraf (örn. salt ürün başlığı)
+    bir sonraki ürün bloğunun BAŞINA eklenir (önceki değil)."""
     if not metin or len(metin) < 30:
         return [metin]
 
@@ -607,18 +657,47 @@ def mesaj_bolum_ayir(metin: str) -> list[str]:
     for p in parcalar:
         genisletilmis.extend(_paragraf_ici_bol(p))
 
-    urun_bloklari = []
-    paylasilan = []
+    # İki geçişli yaklaşım:
+    # 1) Tüm bloklara tip ata
+    # 2) "neither" tipindekileri sonraki ürün başlığı say, yoksa paylaşılan
+    tipler = []   # ("urun", "paylasilan", "neither")
     for p in genisletilmis:
         if _paylasilan_mi(p):
-            paylasilan.append(p)
+            tipler.append("paylasilan")
         elif _urun_paragrafi_mi(p):
-            urun_bloklari.append(p)
+            tipler.append("urun")
         else:
-            if urun_bloklari:
-                urun_bloklari[-1] = urun_bloklari[-1] + "\n\n" + p
+            tipler.append("neither")
+
+    urun_bloklari: list[str] = []
+    paylasilan: list[str] = []
+    bekleyen_baslik: str = ""   # Henüz ürünle eşleşmemiş "neither" paragraf
+
+    for p, tip in zip(genisletilmis, tipler):
+        if tip == "paylasilan":
+            paylasilan.append(p)
+        elif tip == "urun":
+            if bekleyen_baslik:
+                urun_bloklari.append(bekleyen_baslik + "\n\n" + p)
+                bekleyen_baslik = ""
             else:
+                urun_bloklari.append(p)
+        else:  # neither
+            # Eğer arkada bir ürün bloğu yoksa → bu sonraki ürünün başlığı
+            # Eğer varsa → mevcut bloğun açıklaması olabilir
+            if not urun_bloklari or bekleyen_baslik:
+                bekleyen_baslik = (bekleyen_baslik + "\n\n" + p).strip() if bekleyen_baslik else p
+            else:
+                # Önceki ürüne eklemek mantıksız (başlık değil, açıklama)
+                # → paylaşılan say
                 paylasilan.append(p)
+
+    # Artakalan başlık varsa son ürüne ekle
+    if bekleyen_baslik and urun_bloklari:
+        urun_bloklari[-1] = urun_bloklari[-1] + "\n\n" + bekleyen_baslik
+    elif bekleyen_baslik:
+        # Hiç ürün bulunamadı, bekleyeni paylaşılana koy (orijinali kaybetmemek için)
+        paylasilan.append(bekleyen_baslik)
 
     if len(urun_bloklari) <= 1:
         return [metin]
