@@ -82,7 +82,20 @@ async def _test_gonder(kuyruk: asyncio.Queue) -> None:
 # ── Ana döngü ───────────────────────────────────────────────────
 
 async def main() -> None:
-    log("SISTEM", "FırsatPulsu v9 başlatılıyor…")
+    log("SISTEM", "═══════════════════════════════════════════")
+    log("SISTEM", "FırsatPulsu v10 başlatılıyor…")
+    log("SISTEM", "═══════════════════════════════════════════")
+
+    # Versiyon entegrasyon kontrolü — eski dosya tespit eder
+    try:
+        from services.analiz import mesaj_bolum_ayir, link_temizle
+        from services.sablon import olustur
+        from utils.log import simdi_tr
+        log("OK", "Modül entegrasyonu doğrulandı (v10)")
+    except ImportError as e:
+        log("KRITIK", f"Modül eksik veya eski: {e}")
+        log("KRITIK", "Lütfen tüm dosyaları yeniden yükle!")
+        sys.exit(1)
 
     if not _config_dogrula():
         sys.exit(1)
@@ -122,7 +135,7 @@ async def main() -> None:
 
             await admin_bildir(
                 tg.client,
-                f"🚀 Bot Başladı v9\n"
+                f"🚀 Bot Başladı v10\n"
                 f"Kanal: {len(config.KAYNAK_KANALLAR)}\n"
                 f"Min indirim: %{config.MIN_INDIRIM}\n"
                 f"Toplam istatistik: {cache.ist_yukle().get('toplam', 0)} fırsat\n\n"
