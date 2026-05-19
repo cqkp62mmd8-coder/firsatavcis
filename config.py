@@ -30,6 +30,13 @@ MARKA_SPAM_LIMIT = int(os.environ.get("MARKA_SPAM_LIMIT", "999"))   # 999 = prat
 MARKA_SPAM_SURE  = 3_600            # saniye
 KUPON_MIN_TL     = int(os.environ.get("KUPON_MIN_TL", "500"))  # Bu TL'nin üstündeki kuponlar geçer
 
+# ── Yeni özellik bayrakları ─────────────────────────────────────
+QR_KOD_AKTIF        = os.environ.get("QR_KOD_AKTIF", "1") == "1"
+SPIKE_MODU_AKTIF    = os.environ.get("SPIKE_MODU_AKTIF", "1") == "1"
+ESKI_MESAJ_LIMIT_DK = int(os.environ.get("ESKI_MESAJ_LIMIT_DK", "180"))   # Bu dakikadan eskiyse atla
+STOK_KONTROL_SAAT   = int(os.environ.get("STOK_KONTROL_SAAT", "6"))       # 0 = devre dışı
+MIN_GORSEL_BOYUT    = int(os.environ.get("MIN_GORSEL_BOYUT", "400"))     # Bu altındaki görsellere logo ekleme
+
 # ── Kara liste ───────────────────────────────────────────────────
 KARA_LISTE = [
     "çorap", "kılıf", "sticker",

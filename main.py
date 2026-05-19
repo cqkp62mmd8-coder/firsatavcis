@@ -3,37 +3,121 @@ FırsatPulsu — Ana Giriş Noktası
 Çalıştır: python main.py
 """
 import asyncio
+import signal
 import sys
 
 from telethon import TelegramClient
 
 import config
 import client as tg
+import state
 from utils import cache
 from utils.log import log
 from watchdog import admin_bildir, kanal_dogrula, calistir as watchdog_calistir
 from handlers import mesaj as mesaj_handler, callback as callback_handler
 from handlers import admin as admin_handler
 from services.kuyruk import worker as kuyruk_worker
+from services import stok_takip
 from schedulers import gunluk, surpriz, haftalik
+
+
+# ── Graceful shutdown — #3 ──────────────────────────────────────
+_shutdown_event = asyncio.Event() if False else None   # main() içinde set edilecek
+_kapanis_baslatildi = False
+
+
+def _signal_handler():
+    """SIGTERM/SIGINT geldiğinde graceful kapanış başlat."""
+    global _kapanis_baslatildi
+    if _kapanis_baslatildi:
+        log("UYARI", "Zorla kapanış istendi — anında çıkılıyor")
+        sys.exit(0)
+    _kapanis_baslatildi = True
+    log("SISTEM", "Kapanış sinyali alındı — graceful shutdown başlıyor")
+    state.durduruldu = True   # Yeni mesaj alma
+    if _shutdown_event is not None:
+        _shutdown_event.set()
+
+
+async def _graceful_bekle(kuyruk: asyncio.Queue, max_saniye: int = 30) -> None:
+    """Kuyruğun boşalmasını bekler (max N saniye)."""
+    log("SISTEM", f"Kuyruğun boşalması bekleniyor (max {max_saniye}s)…")
+    son_zaman = asyncio.get_event_loop().time() + max_saniye
+    while kuyruk.qsize() > 0:
+        if asyncio.get_event_loop().time() > son_zaman:
+            log("UYARI", f"Süre aşıldı, {kuyruk.qsize()} mesaj kayıp")
+            break
+        await asyncio.sleep(1)
+    # Cache'i son bir kez kaydet
+    try:
+        from utils.cache import ist_kaydet, _telegram_kaydet
+        ist_kaydet()
+        await _telegram_kaydet()
+        log("OK", "İstatistik son kez kaydedildi")
+    except Exception as e:
+        log("UYARI", f"Son kayıt hatası: {e}")
+    log("SISTEM", "Graceful shutdown tamamlandı — çıkılıyor")
 
 
 # ── Başlangıç doğrulaması ────────────────────────────────────────
 
 def _config_dogrula() -> bool:
-    """Kritik env değişkenlerini kontrol eder; eksik varsa False döner."""
-    eksik = []
+    """Tüm config değerlerini detaylı kontrol eder. Sorun varsa False döner."""
+    hatalar = []
+
+    # ZORUNLU alanlar — eksik ya da geçersiz
     if not config.API_ID or config.API_ID == 0:
-        eksik.append("API_ID")
+        hatalar.append("API_ID boş veya 0")
+    elif config.API_ID < 1000:
+        hatalar.append(f"API_ID görünüşe göre geçersiz ({config.API_ID}) — my.telegram.org'dan alınan tam sayı olmalı")
+
     if not config.API_HASH:
-        eksik.append("API_HASH")
+        hatalar.append("API_HASH boş")
+    elif len(config.API_HASH) < 30 or len(config.API_HASH) > 40:
+        hatalar.append(f"API_HASH uzunluğu garip ({len(config.API_HASH)} kar) — 32 karakter olmalı")
+
     if not config.SESSION_STRING:
-        eksik.append("SESSION_STRING")
+        hatalar.append("SESSION_STRING boş — kullanıcı oturumu yüklenmemiş")
+    elif len(config.SESSION_STRING) < 100:
+        hatalar.append(f"SESSION_STRING çok kısa ({len(config.SESSION_STRING)} kar)")
+
     if not config.HEDEF_KANAL:
-        eksik.append("CHANNEL_ID")
-    if eksik:
-        log("KRITIK", f"Eksik ortam değişkenleri: {', '.join(eksik)}")
+        hatalar.append("CHANNEL_ID boş")
+    elif not (config.HEDEF_KANAL.startswith("@") or config.HEDEF_KANAL.startswith("-100")):
+        hatalar.append(f"CHANNEL_ID format yanlış: '{config.HEDEF_KANAL}' — '@kanalad' veya '-100...' olmalı")
+
+    # OPSİYONEL ama varsa sıkı kontrol
+    if config.ADMIN_ID:
+        try:
+            aid = int(config.ADMIN_ID)
+            if aid < 1000:
+                hatalar.append(f"ADMIN_ID görünüşe göre geçersiz ({aid})")
+        except ValueError:
+            hatalar.append(f"ADMIN_ID sayı değil: '{config.ADMIN_ID}'")
+
+    if config.BOT_TOKEN and ":" not in config.BOT_TOKEN:
+        hatalar.append("BOT_TOKEN format yanlış — '123456:ABC...' formatında olmalı")
+
+    # Sayısal değerler — mantıklı aralık
+    if not (1 <= config.MIN_INDIRIM <= 99):
+        hatalar.append(f"MIN_INDIRIM mantıksız ({config.MIN_INDIRIM}) — 1-99 arası olmalı")
+    if not (0 <= config.MIN_KALITE <= 100):
+        hatalar.append(f"MIN_KALITE mantıksız ({config.MIN_KALITE}) — 0-100 arası olmalı")
+    if not (5 <= config.KUYRUK_BEKLEME <= 3600):
+        hatalar.append(f"KUYRUK_BEKLEME mantıksız ({config.KUYRUK_BEKLEME}s) — 5-3600 arası olmalı")
+
+    # Kaynak kanal kontrolü
+    if not config.KAYNAK_KANALLAR:
+        hatalar.append("KAYNAK_KANALLAR listesi boş — dinlenecek kanal yok")
+
+    if hatalar:
+        log("KRITIK", "❌ Config hataları:")
+        for h in hatalar:
+            log("KRITIK", f"  • {h}")
+        log("KRITIK", ".env.example dosyasına bak, eksikleri Heroku Config Vars'a ekle.")
         return False
+
+    log("OK", "✅ Config doğrulandı")
     return True
 
 
@@ -82,8 +166,20 @@ async def _test_gonder(kuyruk: asyncio.Queue) -> None:
 # ── Ana döngü ───────────────────────────────────────────────────
 
 async def main() -> None:
+    global _shutdown_event
+    _shutdown_event = asyncio.Event()
+
+    # #3 — SIGTERM/SIGINT yakala (graceful shutdown)
+    loop = asyncio.get_running_loop()
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, _signal_handler)
+    except NotImplementedError:
+        # Windows'ta add_signal_handler yok
+        log("UYARI", "Signal handler kayıt edilemedi (Windows?)")
+
     log("SISTEM", "═══════════════════════════════════════════")
-    log("SISTEM", "FırsatPulsu v10 başlatılıyor…")
+    log("SISTEM", "FırsatPulsu v12 başlatılıyor…")
     log("SISTEM", "═══════════════════════════════════════════")
 
     # Versiyon entegrasyon kontrolü — eski dosya tespit eder
@@ -91,7 +187,7 @@ async def main() -> None:
         from services.analiz import mesaj_bolum_ayir, link_temizle
         from services.sablon import olustur
         from utils.log import simdi_tr
-        log("OK", "Modül entegrasyonu doğrulandı (v10)")
+        log("OK", "Modül entegrasyonu doğrulandı (v12)")
     except ImportError as e:
         log("KRITIK", f"Modül eksik veya eski: {e}")
         log("KRITIK", "Lütfen tüm dosyaları yeniden yükle!")
@@ -133,9 +229,17 @@ async def main() -> None:
             mesaj_handler.kaydet(tg.client, kuyruk)
             admin_handler.kaydet(tg.client, kuyruk, tg.bot_client)   # Admin komutları
 
+            # #1 catch_up — restart sırasında kaçan mesajları yakala
+            try:
+                log("BILGI", "catch_up: kaçan mesajlar yakalanıyor…")
+                await tg.client.catch_up()
+                log("OK", "catch_up tamamlandı")
+            except Exception as e:
+                log("UYARI", f"catch_up hatası (yok sayılıyor): {e}")
+
             await admin_bildir(
                 tg.client,
-                f"🚀 Bot Başladı v10\n"
+                f"🚀 Bot Başladı v12\n"
                 f"Kanal: {len(config.KAYNAK_KANALLAR)}\n"
                 f"Min indirim: %{config.MIN_INDIRIM}\n"
                 f"Toplam istatistik: {cache.ist_yukle().get('toplam', 0)} fırsat\n\n"
@@ -160,12 +264,28 @@ async def main() -> None:
                 (surpriz.zamanlayici(tg.client), "surpriz"),
                 (haftalik.zamanlayici(tg.client), "haftalik"),
                 (cache.periyodik_kaydet(600), "cache_kaydet"),
+                (stok_takip.kontrol_dongusu(tg.client), "stok_takip"),
             ]:
                 t = asyncio.ensure_future(coro)
                 t.add_done_callback(_gorev_bitti)
                 log("BILGI", f"Arka plan görevi başlatıldı: {ad}")
 
-            await tg.client.run_until_disconnected()
+            # Ana bekleyiş — disconnect ya da shutdown sinyali
+            disconnect_task = asyncio.ensure_future(tg.client.run_until_disconnected())
+            shutdown_task  = asyncio.ensure_future(_shutdown_event.wait())
+            await asyncio.wait(
+                [disconnect_task, shutdown_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Graceful shutdown başladıysa
+            if _kapanis_baslatildi:
+                await _graceful_bekle(kuyruk, max_saniye=30)
+                try:
+                    await tg.client.disconnect()
+                except Exception:
+                    pass
+                break
 
         except KeyboardInterrupt:
             log("SISTEM", "Manuel kapatma — çıkılıyor")
