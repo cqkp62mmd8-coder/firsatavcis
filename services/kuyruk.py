@@ -17,6 +17,33 @@ from utils.log import log, gece_modu_aktif
 _MAX_RETRY = 3
 
 
+def _aktif_bekleme() -> int:
+    """#12 — Spike modu: yoğun saatlerde bekleme süresini kısalt.
+    - Cuma akşamı 18-23 → KUYRUK_BEKLEME / 2
+    - Pazartesi sabah 09-12 → KUYRUK_BEKLEME / 2
+    - Gece 02-07 → KUYRUK_BEKLEME × 2 (uyandırmamak için)
+    - Diğer → KUYRUK_BEKLEME"""
+    if not config.SPIKE_MODU_AKTIF:
+        return config.KUYRUK_BEKLEME
+
+    from utils.log import simdi_tr
+    simdi = simdi_tr()
+    gun = simdi.weekday()   # 0=pzt, 4=cuma
+    saat = simdi.hour
+    temel = config.KUYRUK_BEKLEME
+
+    # Cuma akşam (4 = Cuma, 17-22)
+    if gun == 4 and 17 <= saat < 23:
+        return max(60, temel // 2)
+    # Pazartesi sabah (0 = Pzt, 9-12)
+    if gun == 0 and 9 <= saat < 13:
+        return max(60, temel // 2)
+    # Gece (2-7)
+    if 2 <= saat < 7:
+        return temel * 2
+    return temel
+
+
 # ── Tepki ───────────────────────────────────────────────────────
 
 async def tepki_ekle(client: TelegramClient, mesaj) -> None:
@@ -116,7 +143,7 @@ async def worker(
                     raw = await client.download_media(gorsel_medya, bytes)
                     if not raw or len(raw) < 1_000:
                         raise ValueError("Görsel çok küçük")
-                    buf = BytesIO(logo_ekle(raw))
+                    buf = BytesIO(logo_ekle(raw, link=lnk))
                     buf.name = "urun.png"
                     kw = dict(file=buf, parse_mode="html", silent=sessiz)
                     if buton:
@@ -150,8 +177,16 @@ async def worker(
             tip = "çoklu" if extra_lnk else "tekli"
             log("OK", f"Gönderildi [{magaza}] %{indirim} ({tip}) | kuyruk={kuyruk.qsize()}")
 
+            # #11 Stok takibe kaydet
+            if msg and lnk:
+                try:
+                    from services.stok_takip import kayit_ekle
+                    kayit_ekle(msg, lnk)
+                except Exception as e:
+                    log("UYARI", f"Stok takip kayıt: {e}")
+
             kuyruk.task_done()
-            await asyncio.sleep(config.KUYRUK_BEKLEME)
+            await asyncio.sleep(_aktif_bekleme())
 
         except Exception as e:
             log("HATA", f"Worker: {type(e).__name__}: {e}")

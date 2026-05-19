@@ -171,12 +171,31 @@ def indirim_oranini_bul(metin: str) -> int:
 # ════════════════════════════════════════════════════════════════
 
 def _parse(s: str) -> float:
+    """Türkçe sayı formatını float'a çevirir.
+
+    Kurallar:
+      • "1.499,00" → 1499.0   (TR: . binlik, , ondalık)
+      • "299,90"   → 299.9
+      • "15.099"   → 15099.0  (TR binlik — ondalıkta 3 hane olmaz)
+      • "15.99"    → 15.99    (ondalık — 2 hane)
+      • "1.499"    → 1499.0   (3 hane → binlik)
+    """
     try:
         s = s.strip().rstrip("+")
         if "," in s and "." in s:
+            # TR: nokta binlik, virgül ondalık
             s = s.replace(".", "").replace(",", ".")
         elif "," in s:
+            # Sadece virgül → TR ondalık
             s = s.replace(",", ".")
+        elif "." in s:
+            # Sadece nokta → ambiguous. 3 haneli sonek varsa binlik, değilse ondalık.
+            # "15.099" → 3 haneli → binlik → 15099
+            # "15.99"  → 2 haneli → ondalık → 15.99
+            son_nokta = s.rfind(".")
+            kalan = s[son_nokta + 1:]
+            if len(kalan) == 3:
+                s = s.replace(".", "")
         return float(s)
     except Exception:
         return 0.0
@@ -295,11 +314,16 @@ def stok_kritik_mi(metin: str) -> bool:
 
 
 def indirim_turu(metin: str) -> str:
+    """'marka' (geniş kampanya) ya da 'urun' (tek ürün) döndürür."""
     ml = (metin or "").lower()
+    # Türkçe karakterli de ASCII'li de yakalansın
     kaliplar = [
-        r"\w+\s*(?:urunlerinde|markasinda|serisinde)\s*%\d+",
-        r"tum\s*\w*\s*urunlerde",
-        r"secili\s*\w*\s*urunlerde",
+        r"\b\w+\s*(?:ürünlerinde|urunlerinde|markasında|markasinda|serisinde|kategorisinde)\b",
+        r"\btüm\s*\w*\s*ürünlerde\b", r"\btum\s*\w*\s*urunlerde\b",
+        r"\bseçili\s*\w*\s*ürünlerde\b", r"\bsecili\s*\w*\s*urunlerde\b",
+        r"\bsepette\s*%",
+        r"%\s*\d+\s*['\u2019]?\s*[aeıi]\s*varan",      # "%60'a varan"
+        r"\b\w+\s+markasında\s+%",
     ]
     return "marka" if any(re.search(k, ml) for k in kaliplar) else "urun"
 
@@ -351,8 +375,8 @@ def urun_adi_bul(metin: str) -> str | None:
         # Emojileri sök, fazla boşluk + son nokta/tire'leri at
         s = emoji_temizle(s)
         s = re.sub(r"\s+", " ", s).strip(" -–—,.|").strip()
-        # Sondaki tek başına "var" / "ve" gibi takıları sil
-        s = re.sub(r"\s+(?:var|ve|ile)\s*$", "", s, flags=re.I).strip()
+        # Sondaki tek başına "var" / "ve" / "indirim" / "kampanya" gibi takıları sil
+        s = re.sub(r"\s+(?:var|ve|ile|indirim|kampanya|fırsat)\s*$", "", s, flags=re.I).strip()
         return s
 
     # Etiket-only satırları reddet (örn. "İndirimli Fiyat:", "Normal Fiyat:")
