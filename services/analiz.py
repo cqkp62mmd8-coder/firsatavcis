@@ -355,23 +355,48 @@ def urun_adi_bul(metin: str) -> str | None:
         s = re.sub(r"\s+(?:var|ve|ile)\s*$", "", s, flags=re.I).strip()
         return s
 
+    # Etiket-only satırları reddet (örn. "İndirimli Fiyat:", "Normal Fiyat:")
+    # Hem ":" ile bitenler hem fiyatı kaldırıldıktan sonra etiket kalanlar
+    _ETIKET_KELIME = re.compile(
+        r"^(?:indirimli\s*fiyat|normal\s*fiyat|liste\s*fiyat|piyasa\s*fiyat|sale\s*price|"
+        r"sepet|kupon|hediye|stokta\s*var|son\s*stok|tükendi|kargo|ücretsiz\s*kargo|"
+        r"fiyat|indirim)\s*[:\-]?\s*$",
+        re.I,
+    )
+
+    def _etiket_satiri_mi(satir: str) -> bool:
+        """'İndirimli Fiyat:' gibi etiket satırı mı."""
+        temiz = emoji_temizle(satir).strip(" -–—,.:|").strip()
+        if not temiz:
+            return True
+        if _ETIKET_KELIME.match(temiz):
+            return True
+        return False
+
     # Öncelik 1: ürün başlık emoji'siyle başlayan satırlar (en ürünsel)
     for satir in satirlar:
         if not _URUN_BAS.match(satir):
             continue
         if satir.startswith(("#", "@")) or "http" in satir:
             continue
-        if "#" in satir:                # hashtag içeren satır ürün adı sayılmaz
+        if "#" in satir:
             continue
         if _KAMPANYA_KALIP.search(satir):
             continue
+        if _etiket_satiri_mi(satir):
+            continue
         temiz = _temizle(satir)
+        # _temizle sonrası ortaya çıkan da hâlâ etiket olabilir
+        if _etiket_satiri_mi(temiz):
+            continue
         if len(temiz) >= 10 and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temiz):
             return temiz[:80]
 
     # Öncelik 2: emoji yok ama temiz uzun ürün adı (fiyatsız)
     for satir in satirlar:
         if "#" in satir:
+            continue
+        if _etiket_satiri_mi(satir):
             continue
         temiz = emoji_temizle(satir)
         if (
@@ -393,11 +418,14 @@ def urun_adi_bul(metin: str) -> str | None:
             continue
         if _KAMPANYA_KALIP.search(satir):
             continue
+        if _etiket_satiri_mi(satir):
+            continue
         temiz = _temizle(satir)
         if (
             len(temiz) >= 8
             and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temiz)
-            and not temiz.lower().startswith(("kupon", "indirim", "sepette", "hepsipara", "premiuma"))
+            and not temiz.lower().startswith(("kupon", "indirim", "sepette", "hepsipara", "premiuma",
+                                              "fiyat", "normal", "liste", "indirimli", "piyasa"))
         ):
             return temiz[:80]
 
