@@ -25,12 +25,32 @@ _YARDIM = (
     "📋 <b>Admin Komutları</b>\n\n"
     "/durum — Bot durumu\n"
     "/istatistik — Detaylı istatistik\n"
+    "/rapor — Gün/saat/kategori detay raporu\n"
     "/bekleyen — Kuyruk bilgisi\n"
+    "/hosgeldin — Kanala hoşgeldin mesajı sabitler\n"
     "/temizle — Görülmüş önbelleği sıfırla\n"
     "/durdur — Gönderimi duraklat\n"
     "/baslat — Gönderimi devam ettir\n"
     "/yardim — Bu listeyi göster"
 )
+
+
+_HOSGELDIN_METNI = """👋 <b>FırsatPulsu'ya Hoş Geldin!</b>
+
+Türkiye'nin en iyi e-ticaret fırsatlarını otomatik olarak takip eden bot kanalı.
+
+✅ Trendyol, Hepsiburada, Amazon, MediaMarkt ve daha fazlası
+✅ Sahte indirim filtresi — sadece gerçek fırsatlar
+✅ Saatlik güncel paylaşım, günün en iyileri 21:00'de
+✅ Sürpriz fırsatlar 12:00-20:00 arası
+
+🔔 <b>Bildirimleri aç</b>, fırsatları kaçırma!
+
+📊 <b>Etiketler</b>: #FırsatPulsu #Elektronik #Giyim #Kozmetik
+
+⚠️ Bot otomatik çalışır, paylaşılan fiyatlar değişebilir.
+Satın almadan önce mutlaka kontrol edin.
+"""
 
 
 async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
@@ -94,10 +114,104 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
             await event.reply("▶️ Bot devam ediyor.")
             log("ADMIN", "Bot devam ettirildi")
 
+        elif komut == "/rapor":
+            await _rapor_olustur(event)
+
+        elif komut == "/hosgeldin":
+            await _hosgeldin_pinle(event)
+
         # Bilinmeyen komutlar sessizce yok sayılır
 
     except Exception as e:
         log("HATA", f"Admin komut: {e}")
+
+
+async def _rapor_olustur(event) -> None:
+    """Detaylı rapor: gün/saat/kategori/mağaza performansı."""
+    from datetime import timedelta
+    ist = ist_yukle()
+    simdi = simdi_tr()
+
+    # Son 7 gün
+    son_7g = 0
+    son_30g = 0
+    for i in range(30):
+        gun = (simdi - timedelta(days=i)).strftime("%Y-%m-%d")
+        sayi = ist.get("gunluk", {}).get(gun, 0)
+        if i < 7:
+            son_7g += sayi
+        son_30g += sayi
+
+    # Top 5 mağaza ve kategori
+    mags = ist.get("magazalar", {})
+    kats = ist.get("kategoriler", {})
+    kanallar = ist.get("kanallar", {})
+
+    top_mag = sorted(mags.items(), key=lambda x: -x[1])[:5]
+    top_kat = sorted(kats.items(), key=lambda x: -x[1])[:5]
+    top_kan = sorted(kanallar.items(), key=lambda x: -x[1])[:5]
+
+    from config import KATEGORI_YAZI
+    bugun_str = simdi.strftime("%Y-%m-%d")
+    dun_str   = (simdi - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    satirlar = [
+        "📊 <b>DETAYLI RAPOR</b>",
+        f"<i>Tarih: {simdi.strftime('%d %b %Y, %H:%M')}</i>",
+        "",
+        "📅 <b>Zaman bazında</b>",
+        f"  Bugün:  {ist.get('gunluk', {}).get(bugun_str, 0)} fırsat",
+        f"  Dün:    {ist.get('gunluk', {}).get(dun_str, 0)} fırsat",
+        f"  7 gün:  {son_7g} fırsat",
+        f"  30 gün: {son_30g} fırsat",
+        f"  Toplam: {ist.get('toplam', 0)} fırsat",
+        "",
+    ]
+
+    if top_mag:
+        satirlar.append("🏪 <b>Top mağazalar</b>")
+        for m, c in top_mag:
+            satirlar.append(f"  {m}: {c}")
+        satirlar.append("")
+
+    if top_kat:
+        satirlar.append("📂 <b>Top kategoriler</b>")
+        for k, c in top_kat:
+            yazi = KATEGORI_YAZI.get(k, k)
+            satirlar.append(f"  {yazi}: {c}")
+        satirlar.append("")
+
+    if top_kan:
+        satirlar.append("📡 <b>Top kaynak kanallar</b>")
+        for k, c in top_kan:
+            satirlar.append(f"  @{k}: {c}")
+
+    await event.reply("\n".join(satirlar), parse_mode="html")
+
+
+async def _hosgeldin_pinle(event) -> None:
+    """Kanala hoşgeldin mesajını gönder ve sabitle.
+    Kullanıcı/Bot client farkına bakmaksızın admin event'in geldiği client'tan yollar."""
+    try:
+        client = event.client
+        # Bot mu user mı bilmemiz lazım — kanala bot yazamaz (admin değilse)
+        # Kullanıcı client'ı kullan, çünkü o zaten kanalın sahibi
+        import client as tg_client
+        kanal_client = tg_client.client   # Kullanıcı client'ı kesin sahip
+
+        msg = await kanal_client.send_message(
+            config.HEDEF_KANAL,
+            _HOSGELDIN_METNI,
+            parse_mode="html",
+            link_preview=False,
+        )
+        try:
+            await kanal_client.pin_message(config.HEDEF_KANAL, msg.id, notify=False)
+            await event.reply("✅ Hoşgeldin mesajı kanala gönderildi ve sabitlendi.")
+        except Exception as e:
+            await event.reply(f"⚠️ Mesaj gönderildi ama sabitlenemedi: {e}")
+    except Exception as e:
+        await event.reply(f"❌ Hata: {e}")
 
 
 def kaydet(

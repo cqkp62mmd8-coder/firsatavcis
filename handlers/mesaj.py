@@ -88,6 +88,18 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             if state.durduruldu:
                 return
 
+            # #13 — Eski mesaj filtresi: mesaj çok eskiyse atla
+            # (forward edilmiş eski içerikler kanala düşebiliyor)
+            try:
+                from datetime import datetime, timezone, timedelta
+                if event.message.date:
+                    yas_sn = (datetime.now(timezone.utc) - event.message.date).total_seconds()
+                    if yas_sn > config.ESKI_MESAJ_LIMIT_DK * 60:
+                        log("FILTRE", f"Eski mesaj atlandı ({int(yas_sn / 60)}dk önce)")
+                        return
+            except Exception:
+                pass
+
             ham = markdown_temizle(event.message.text or "")
 
             # Buton linklerini topla — birkaç farklı yoldan dene
