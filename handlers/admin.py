@@ -26,6 +26,7 @@ _YARDIM = (
     "/durum — Bot durumu\n"
     "/istatistik — Detaylı istatistik\n"
     "/rapor — Gün/saat/kategori detay raporu\n"
+    "/tani — Yüklü modüllerin versiyon teşhisi\n"
     "/bekleyen — Kuyruk bilgisi\n"
     "/hosgeldin — Kanala hoşgeldin mesajı sabitler\n"
     "/temizle — Görülmüş önbelleği sıfırla\n"
@@ -120,6 +121,9 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
         elif komut == "/hosgeldin":
             await _hosgeldin_pinle(event)
 
+        elif komut == "/tani":
+            await _tani_raporu(event)
+
         # Bilinmeyen komutlar sessizce yok sayılır
 
     except Exception as e:
@@ -185,6 +189,54 @@ async def _rapor_olustur(event) -> None:
         satirlar.append("📡 <b>Top kaynak kanallar</b>")
         for k, c in top_kan:
             satirlar.append(f"  @{k}: {c}")
+
+    await event.reply("\n".join(satirlar), parse_mode="html")
+
+
+async def _tani_raporu(event) -> None:
+    """Yüklü modüllerin v12 fonksiyonlarını kontrol eder.
+    Eski dosya tespit eder."""
+    import importlib
+
+    beklenenler = {
+        "services.analiz": [
+            "mesaj_bolum_ayir", "link_temizle", "_MARKA_KAMPANYA_KALIP",
+            "magaza_bul", "urun_adi_bul",
+        ],
+        "services.sablon": [
+            "negatif_mi", "trend_kaydet", "olustur_coklu",
+            "_tasarruf_hesapla", "_fiyat_format", "_baslik",
+        ],
+        "services.zenginlestir": ["guvenilirlik_etiketi"],
+        "services.stok_takip":   ["kayit_ekle", "kontrol_dongusu"],
+        "services.gorsel":       ["logo_ekle"],
+        "utils.log":             ["simdi_tr", "TR_TZ"],
+        "utils.cache":           ["telegram_yukle", "periyodik_kaydet"],
+        "handlers.mesaj":        ["_blok_analiz"],
+    }
+
+    satirlar = ["🔍 <b>Modül Teşhisi</b>", ""]
+    toplam_eksik = 0
+    for mod_ad, fonksiyonlar in beklenenler.items():
+        try:
+            m = importlib.import_module(mod_ad)
+            eksik = [f for f in fonksiyonlar if not hasattr(m, f)]
+            if eksik:
+                satirlar.append(f"❌ <code>{mod_ad}</code>")
+                satirlar.append(f"   eksik: {', '.join(eksik)}")
+                toplam_eksik += len(eksik)
+            else:
+                satirlar.append(f"✅ <code>{mod_ad}</code>")
+        except ImportError as e:
+            satirlar.append(f"❌ <code>{mod_ad}</code> import edilemiyor: {e}")
+            toplam_eksik += 5
+
+    if toplam_eksik == 0:
+        satirlar.insert(2, "<b>✅ Tüm modüller v12 — temiz</b>\n")
+    else:
+        satirlar.insert(2, f"<b>⚠️ {toplam_eksik} eksik bulundu — dosyalar eski!</b>")
+        satirlar.append("")
+        satirlar.append("Çözüm: firsatpulsu_v12.zip'i yeniden yükle, tüm dosyaların üzerine yaz.")
 
     await event.reply("\n".join(satirlar), parse_mode="html")
 
