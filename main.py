@@ -11,13 +11,13 @@ from telethon import TelegramClient
 import config
 import client as tg
 import state
-from utils import cache
+from utils import cache, db, metrik, izleme
 from utils.log import log
 from watchdog import admin_bildir, kanal_dogrula, calistir as watchdog_calistir
 from handlers import mesaj as mesaj_handler, callback as callback_handler
 from handlers import admin as admin_handler
 from services.kuyruk import worker as kuyruk_worker
-from services import stok_takip
+from services import stok_takip, health
 from schedulers import gunluk, surpriz, haftalik
 
 
@@ -179,7 +179,7 @@ async def main() -> None:
         log("UYARI", "Signal handler kayıt edilemedi (Windows?)")
 
     log("SISTEM", "═══════════════════════════════════════════")
-    log("SISTEM", "FırsatPulsu v12 başlatılıyor…")
+    log("SISTEM", "FırsatPulsu v13 başlatılıyor…")
     log("SISTEM", "═══════════════════════════════════════════")
 
     # Versiyon entegrasyon kontrolü — eski dosya tespit eder
@@ -187,7 +187,7 @@ async def main() -> None:
         from services.analiz import mesaj_bolum_ayir, link_temizle
         from services.sablon import olustur
         from utils.log import simdi_tr
-        log("OK", "Modül entegrasyonu doğrulandı (v12)")
+        log("OK", "Modül entegrasyonu doğrulandı (v13)")
     except ImportError as e:
         log("KRITIK", f"Modül eksik veya eski: {e}")
         log("KRITIK", "Lütfen tüm dosyaları yeniden yükle!")
@@ -201,6 +201,13 @@ async def main() -> None:
         f"Kalite: {config.MIN_KALITE} | "
         f"Bekleme: {config.KUYRUK_BEKLEME}s"
     ))
+
+    # #3 SQLite başlat (JSON varsa migrate eder)
+    try:
+        db.init()
+    except Exception as e:
+        log("KRITIK", f"DB başlatılamadı: {e}")
+        sys.exit(1)
 
     kuyruk: asyncio.Queue = asyncio.Queue(maxsize=50)
 
@@ -239,7 +246,7 @@ async def main() -> None:
 
             await admin_bildir(
                 tg.client,
-                f"🚀 Bot Başladı v12\n"
+                f"🚀 Bot Başladı v13\n"
                 f"Kanal: {len(config.KAYNAK_KANALLAR)}\n"
                 f"Min indirim: %{config.MIN_INDIRIM}\n"
                 f"Toplam istatistik: {cache.ist_yukle().get('toplam', 0)} fırsat\n\n"
@@ -249,25 +256,59 @@ async def main() -> None:
             if config.TEST_MODE:
                 await _test_gonder(kuyruk)
 
-            # Arka plan görevleri — patlasalar bile log'lansınlar
-            def _gorev_bitti(task):
-                if task.cancelled():
-                    return
-                exc = task.exception()
-                if exc is not None:
-                    log("KRITIK", f"Arka plan görevi öldü: {type(exc).__name__}: {exc}")
+            # #10 Supervisor pattern — patlayan görevleri yeniden başlat
+            import os
+            _port = int(os.environ.get("PORT", "8080"))
+            _gorev_fabrikalari = {
+                "kuyruk_worker": lambda: kuyruk_worker(tg.client, tg.bot_client, kuyruk),
+                "watchdog":      lambda: watchdog_calistir(tg.client, kuyruk),
+                "gunluk":        lambda: gunluk.zamanlayici(tg.client),
+                "surpriz":       lambda: surpriz.zamanlayici(tg.client),
+                "haftalik":      lambda: haftalik.zamanlayici(tg.client),
+                "cache_kaydet":  lambda: cache.periyodik_kaydet(600),
+                "stok_takip":    lambda: stok_takip.kontrol_dongusu(tg.client),
+                "gunluk_yedek":  lambda: cache.gunluk_yedek(),
+                "health":        lambda: health.baslat(kuyruk, port=_port),
+            }
+            _gorev_yeniden_baslat_sayilari: dict[str, int] = {}
 
-            for coro, ad in [
-                (kuyruk_worker(tg.client, tg.bot_client, kuyruk), "kuyruk_worker"),
-                (watchdog_calistir(tg.client, kuyruk), "watchdog"),
-                (gunluk.zamanlayici(tg.client), "gunluk"),
-                (surpriz.zamanlayici(tg.client), "surpriz"),
-                (haftalik.zamanlayici(tg.client), "haftalik"),
-                (cache.periyodik_kaydet(600), "cache_kaydet"),
-                (stok_takip.kontrol_dongusu(tg.client), "stok_takip"),
-            ]:
-                t = asyncio.ensure_future(coro)
-                t.add_done_callback(_gorev_bitti)
+            def _supervise(ad: str):
+                def _bitti(task):
+                    if task.cancelled() or _kapanis_baslatildi:
+                        return
+                    exc = task.exception()
+                    if exc is None:
+                        return
+                    sayim = _gorev_yeniden_baslat_sayilari.get(ad, 0) + 1
+                    _gorev_yeniden_baslat_sayilari[ad] = sayim
+                    log("KRITIK", f"Görev '{ad}' öldü ({type(exc).__name__}: {exc}) "
+                                  f"— yeniden başlatılıyor (deneme #{sayim})")
+                    metrik.kayit("gorev_oldu", veri={"ad": ad, "hata": str(exc), "sayim": sayim})
+
+                    # #2 — Admin'e kritik uyarı (her 3 patlama bildirim)
+                    if sayim % 3 == 1:
+                        asyncio.create_task(izleme.kritik_uyari(
+                            tg.client,
+                            f"Görev '{ad}' patladı ({sayim}. kez):\n{type(exc).__name__}: {exc}"
+                        ))
+
+                    if sayim > 50:
+                        log("KRITIK", f"'{ad}' 50+ kez patladı, vazgeçildi")
+                        return
+                    asyncio.get_event_loop().call_later(
+                        min(300, 5 * sayim),
+                        lambda: _baslat(ad),
+                    )
+                return _bitti
+
+            def _baslat(ad: str):
+                if _kapanis_baslatildi:
+                    return
+                t = asyncio.ensure_future(_gorev_fabrikalari[ad]())
+                t.add_done_callback(_supervise(ad))
+
+            for ad in _gorev_fabrikalari:
+                _baslat(ad)
                 log("BILGI", f"Arka plan görevi başlatıldı: {ad}")
 
             # Ana bekleyiş — disconnect ya da shutdown sinyali

@@ -19,7 +19,7 @@ KUYRUK_BEKLEME = int(os.environ.get("KUYRUK_BEKLEME", "180"))
 TEST_MODE      = os.environ.get("TEST_MODE", "0") == "1"
 
 # ── Sistem ───────────────────────────────────────────────────────
-DATA_DIR         = "/data" if os.path.exists("/data") else "."
+DATA_DIR         = os.environ.get("DATA_DIR") or ("/data" if os.path.exists("/data") else ".")
 GORULMUS_FILE    = os.path.join(DATA_DIR, "gorulmus.json")
 ISTATISTIK_FILE  = os.path.join(DATA_DIR, "istatistik.json")
 LOGO_DOSYA       = "logo.PNG"
