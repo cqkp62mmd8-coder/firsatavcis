@@ -20,14 +20,15 @@ class TestOlustur:
 
     def test_tasarruf_etiketi_buyuk(self):
         from services.sablon import olustur
-        # 100 TL tasarruf gözükmeli
+        # Tasarruf TL'si artık başlıkta yok — sadece %
         m = "Ürün 200 TL yerine 100 TL"
         sonuc = olustur(m, 50, ["https://amzn.to/x"])
-        assert "tasarruf" in sonuc.lower()
+        assert sonuc is not None
+        assert "%50" in sonuc
 
     def test_tasarruf_etiketi_kucuk_gizli(self):
         from services.sablon import olustur
-        # 30 TL tasarruf — gizlenmeli
+        # Bu test artık trivial — başlıkta hiçbir tasarruf etiketi yok
         m = "Kalem 60 TL yerine 30 TL"
         sonuc = olustur(m, 50, ["https://hb.biz/x"])
         assert "tasarruf" not in sonuc.lower()

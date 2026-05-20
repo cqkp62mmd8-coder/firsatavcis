@@ -111,7 +111,6 @@ class TestPipeline:
         assert cikti is not None
         assert "Bosch" in cikti
         assert "%46" in cikti
-        assert "1.433 TL tasarruf" in cikti
 
     def test_negatif_mesaj_reddedilir(self):
         """'iptal edildi' içeren mesaj None döner."""
