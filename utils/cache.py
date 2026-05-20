@@ -1,169 +1,210 @@
 """
-Görülmüş + istatistik kalıcı önbelleği.
+Görülmüş + istatistik kalıcılığı — artık SQLite tabanlı.
+Telegram backup'ı paralel olarak duruyor (felaket senaryosunda kurtarma).
 
-KALICILIK STRATEJİSİ:
-- gorulmus: yerel JSON dosyası (Heroku'da restart'ta kaybedilir, 7 günlük TTL var, tolere edilebilir).
-- istatistik: Hem yerel diske hem Telegram'a (admin DM'ine) edit-edilen sabit bir mesaja yazılır.
-  Bot her başlangıçta Telegram'dan yükler — Heroku ephemeral disk problemini çözer.
+#1 DÜZELTME: Görülmüş cache artık SQLite'ta — Railway restart'ta kayıp yok.
+#7 DÜZELTME: Günde bir Telegram'a tam backup atılıyor.
+#13 DÜZELTME: Schema versiyonu DB'de tutuluyor.
 """
 import asyncio
 import json
-from datetime import datetime, timezone
+import os
 
 import config
+from utils import db
 from utils.log import log, simdi_tr
 
-# ── İç durum ────────────────────────────────────────────────────
-_gorulmus: dict[str, float] | None = None
-_istatistik: dict | None = None
-_ist_degisim: int = 0
-
-# Telegram kalıcılığı
+# ── Telegram backup için durum ──────────────────────────────────
 _tg_client = None
 _ist_msg_id: int | None = None
 _kayit_kilidi = asyncio.Lock()
-_VERI_BASLIK = "##FIRSATPULSU_IST_V1##"
+_VERI_BASLIK = "##FIRSATPULSU_IST_V2##"   # v2 = SQLite çağı
 
 
 # ════════════════════════════════════════════════════════════════
-# Görülmüş (yerel disk — restart'ta kaybedilebilir)
+# Görülmüş (SQLite) — duplikat tespiti
 # ════════════════════════════════════════════════════════════════
-def _gorulmus_yukle() -> dict[str, float]:
-    global _gorulmus
-    if _gorulmus is None:
-        try:
-            with open(config.GORULMUS_FILE) as f:
-                _gorulmus = json.load(f)
-        except Exception:
-            _gorulmus = {}
-    return _gorulmus
-
-
-def _gorulmus_kaydet() -> None:
-    if _gorulmus is None:
-        return
-    try:
-        kayit = _gorulmus
-        if len(kayit) > config.GORULMUS_MAX:
-            kayit = dict(sorted(kayit.items(), key=lambda x: x[1], reverse=True)[: config.GORULMUS_MAX])
-            _gorulmus.clear()
-            _gorulmus.update(kayit)
-        with open(config.GORULMUS_FILE, "w") as f:
-            json.dump(_gorulmus, f)
-    except Exception as e:
-        log("HATA", f"görülmüş kaydetme: {e}")
-
 
 def gorulmus_var_mi(mid: str) -> bool:
-    return mid in _gorulmus_yukle()
+    with db.cursor() as c:
+        c.execute("SELECT 1 FROM gorulmus WHERE msg_hash=? LIMIT 1", (mid,))
+        return c.fetchone() is not None
 
 
 def gorulmus_ekle(mid: str) -> None:
-    _gorulmus_yukle()[mid] = datetime.now(timezone.utc).timestamp()
-    _gorulmus_kaydet()
+    with db.cursor() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO gorulmus(msg_hash, eklendi_ts) VALUES (?, ?)",
+            (mid, simdi_tr().timestamp()),
+        )
 
 
-def gorulmus_temizle() -> None:
-    g = _gorulmus_yukle()
-    simdi = datetime.now(timezone.utc).timestamp()
-    onceki = len(g)
-    eskiler = [k for k, v in g.items() if simdi - v >= config.GORULMUS_TTL]
-    for k in eskiler:
-        del g[k]
-    if len(g) > config.GORULMUS_MAX:
-        fazla = sorted(g.items(), key=lambda x: x[1])[: len(g) - config.GORULMUS_MAX]
-        for k, _ in fazla:
-            del g[k]
-    temizlenen = onceki - len(g)
-    if temizlenen > 0:
-        log("BILGI", f"{temizlenen} eski görülmüş kaydı temizlendi")
-    _gorulmus_kaydet()
+def gorulmus_temizle() -> int:
+    """TTL'i geçenleri sil. #11 — RAM şişmesini önler."""
+    silinen = db.temizle_eski("gorulmus", "eklendi_ts", config.GORULMUS_TTL)
+    if silinen > 0:
+        log("BILGI", f"{silinen} eski görülmüş kaydı temizlendi")
+    # Limit kontrol — fazlasını da sil
+    with db.cursor() as c:
+        c.execute("SELECT COUNT(*) FROM gorulmus")
+        sayi = c.fetchone()[0]
+        if sayi > config.GORULMUS_MAX:
+            fazla = sayi - config.GORULMUS_MAX
+            c.execute("""
+                DELETE FROM gorulmus
+                WHERE msg_hash IN (
+                    SELECT msg_hash FROM gorulmus
+                    ORDER BY eklendi_ts ASC LIMIT ?
+                )
+            """, (fazla,))
+            log("BILGI", f"{fazla} eski görülmüş kaydı boyut limiti ile silindi")
+    return silinen
 
 
 # ════════════════════════════════════════════════════════════════
-# İstatistik — Telegram kalıcılığı
+# İstatistik (SQLite KV store + Telegram backup)
 # ════════════════════════════════════════════════════════════════
 
-def _bos_istatistik() -> dict:
+def _ist_oku(anahtar: str, default=None):
+    with db.cursor() as c:
+        c.execute("SELECT value FROM istatistik WHERE key=?", (anahtar,))
+        row = c.fetchone()
+        if row is None:
+            return default
+        try:
+            return json.loads(row["value"])
+        except Exception:
+            return default
+
+
+def _ist_yaz(anahtar: str, deger) -> None:
+    with db.cursor() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO istatistik(key, value) VALUES (?, ?)",
+            (anahtar, json.dumps(deger, ensure_ascii=False)),
+        )
+
+
+def ist_yukle() -> dict:
+    """Tüm istatistiği dict olarak döndürür (geri uyumluluk için)."""
     return {
-        "toplam": 0,
-        "kanallar": {},
-        "gunluk": {},
-        "kategoriler": {},
-        "magazalar": {},
+        "toplam":      _ist_oku("toplam", 0),
+        "kanallar":    _ist_oku("kanallar", {}),
+        "magazalar":   _ist_oku("magazalar", {}),
+        "kategoriler": _ist_oku("kategoriler", {}),
+        "gunluk":      _ist_oku("gunluk", {}),
     }
 
 
+def ist_kaydet() -> None:
+    """Eski API uyumluluğu için. SQLite zaten anlık yazıyor.
+    Telegram backup için async tetikleyici."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_telegram_kaydet())
+    except RuntimeError:
+        pass
+
+
+def ist_guncelle(kanal: str, magaza: str, kategori: str) -> None:
+    """Bir fırsat paylaşımı sayar."""
+    bugun = simdi_tr().strftime("%Y-%m-%d")
+    toplam = _ist_oku("toplam", 0) + 1
+    _ist_yaz("toplam", toplam)
+
+    for tablo_ad, alt_anahtar in [
+        ("kanallar", kanal),
+        ("magazalar", magaza),
+        ("kategoriler", kategori),
+        ("gunluk", bugun),
+    ]:
+        d = _ist_oku(tablo_ad, {})
+        d[alt_anahtar] = d.get(alt_anahtar, 0) + 1
+        _ist_yaz(tablo_ad, d)
+
+
+# ════════════════════════════════════════════════════════════════
+# Telegram backup (#7 — felaket kurtarma)
+# ════════════════════════════════════════════════════════════════
+
 async def telegram_yukle(tg_client) -> None:
-    """Bot başlangıcında çağrılır. Admin DM'inden istatistik mesajını yükler.
-    Bulamazsa yerel diski dener, o da yoksa boş başlatır."""
-    global _istatistik, _ist_msg_id, _tg_client
+    """Bot başlangıcında: önce SQLite'a bak (db.init zaten yaptı),
+    SQLite boşsa Telegram'dan restore et."""
+    global _tg_client, _ist_msg_id
     _tg_client = tg_client
 
-    yuklendi = False
-
-    # 1) Telegram'dan dene
-    if config.ADMIN_ID:
-        try:
-            admin_id = int(config.ADMIN_ID)
-            async for msg in tg_client.iter_messages(admin_id, limit=300):
-                if msg.text and msg.text.startswith(_VERI_BASLIK):
-                    try:
-                        json_str = msg.text[len(_VERI_BASLIK):].strip()
-                        _istatistik = json.loads(json_str)
+    # SQLite'da veri var mı?
+    toplam = _ist_oku("toplam", 0)
+    if toplam > 0:
+        log("OK", f"İstatistik SQLite'tan yüklendi (toplam: {toplam})")
+        # Mevcut Telegram backup mesaj ID'sini bul
+        if config.ADMIN_ID:
+            try:
+                admin_id = int(config.ADMIN_ID)
+                async for msg in tg_client.iter_messages(admin_id, limit=200):
+                    if msg.text and msg.text.startswith(_VERI_BASLIK):
                         _ist_msg_id = msg.id
-                        yuklendi = True
-                        log("OK", f"İstatistik Telegram'dan yüklendi (toplam: {_istatistik.get('toplam', 0)})")
                         break
-                    except json.JSONDecodeError as e:
-                        log("UYARI", f"İstatistik JSON parse hatası: {e}")
-        except Exception as e:
-            log("UYARI", f"Telegram istatistik yükleme: {e}")
+            except Exception:
+                pass
+        return
 
-    # 2) Yerel diskten dene (Telegram'dan gelmediyse)
-    if not yuklendi:
-        try:
-            with open(config.ISTATISTIK_FILE) as f:
-                _istatistik = json.load(f)
-                log("OK", f"İstatistik diskten yüklendi (toplam: {_istatistik.get('toplam', 0)})")
-                yuklendi = True
-        except Exception:
-            pass
+    # SQLite boş — Telegram'dan restore et
+    if not config.ADMIN_ID:
+        log("BILGI", "İstatistik sıfırdan başlatıldı (admin yok, restore edilemez)")
+        return
 
-    # 3) Sıfırdan başla
-    if not yuklendi:
-        _istatistik = _bos_istatistik()
-        log("BILGI", "İstatistik sıfırdan başlatıldı")
-
-    # Telegram'a ilk kaydı yap (mesaj ID kazanmak için)
-    if config.ADMIN_ID and _tg_client and _ist_msg_id is None:
-        await _telegram_kaydet()
+    try:
+        admin_id = int(config.ADMIN_ID)
+        async for msg in tg_client.iter_messages(admin_id, limit=300):
+            if not msg.text:
+                continue
+            if msg.text.startswith(_VERI_BASLIK) or msg.text.startswith("##FIRSATPULSU_IST_V1##"):
+                try:
+                    json_str = msg.text.split("\n", 1)[1].strip()
+                    data = json.loads(json_str)
+                    # SQLite'a yaz
+                    for k, v in data.items():
+                        _ist_yaz(k, v)
+                    _ist_msg_id = msg.id
+                    log("OK", f"İstatistik Telegram'dan restore edildi (toplam: {data.get('toplam', 0)})")
+                    return
+                except Exception as e:
+                    log("UYARI", f"Backup parse hatası: {e}")
+    except Exception as e:
+        log("UYARI", f"Telegram restore: {e}")
 
 
 async def _telegram_kaydet() -> None:
-    """İstatistiği admin DM'ine kaydet. Edit varsa edit, yoksa yeni gönder."""
+    """SQLite'taki tüm istatistiği Telegram'a tek mesaj olarak yaz."""
     global _ist_msg_id
-    if not _tg_client or not config.ADMIN_ID or _istatistik is None:
+    if not _tg_client or not config.ADMIN_ID:
         return
 
     async with _kayit_kilidi:
         try:
             admin_id = int(config.ADMIN_ID)
-            metin = _VERI_BASLIK + "\n" + json.dumps(_istatistik, ensure_ascii=False)
-            # 4096 karakter Telegram sınırı
+            data = ist_yukle()
+
+            # Gunluk kayıtları 30 gün ile sınırla (4KB Telegram limiti için)
+            if "gunluk" in data and len(data["gunluk"]) > 30:
+                sirali = sorted(data["gunluk"].items(), reverse=True)[:30]
+                data["gunluk"] = dict(sirali)
+                _ist_yaz("gunluk", data["gunluk"])
+
+            metin = _VERI_BASLIK + "\n" + json.dumps(data, ensure_ascii=False)
             if len(metin) > 4000:
-                # Eski günlük kayıtları kırp (sadece son 30 gün)
-                gunluk = _istatistik.get("gunluk", {})
-                if len(gunluk) > 30:
-                    sirali = sorted(gunluk.items(), reverse=True)[:30]
-                    _istatistik["gunluk"] = dict(sirali)
-                metin = _VERI_BASLIK + "\n" + json.dumps(_istatistik, ensure_ascii=False)
+                # Hâlâ uzunsa kanallar/mağazalar top 10 ile sınırla
+                for k in ("kanallar", "magazalar"):
+                    if len(data.get(k, {})) > 10:
+                        ust = dict(sorted(data[k].items(), key=lambda x: -x[1])[:10])
+                        data[k] = ust
+                metin = _VERI_BASLIK + "\n" + json.dumps(data, ensure_ascii=False)
 
             if _ist_msg_id:
                 try:
                     await _tg_client.edit_message(admin_id, _ist_msg_id, metin)
                 except Exception:
-                    # Edit başarısız (mesaj silinmiş olabilir) — yeniden gönder
                     msg = await _tg_client.send_message(admin_id, metin)
                     _ist_msg_id = msg.id
             else:
@@ -173,58 +214,40 @@ async def _telegram_kaydet() -> None:
             log("UYARI", f"Telegram istatistik kaydetme: {e}")
 
 
-def _disk_kaydet() -> None:
-    """Yerel diske de yaz (Telegram fallback olarak)."""
-    if _istatistik is None:
-        return
-    try:
-        with open(config.ISTATISTIK_FILE, "w") as f:
-            json.dump(_istatistik, f)
-    except Exception:
-        pass
-
-
-def ist_yukle() -> dict:
-    """Sync: bellekteki kopyayı dön. Önce telegram_yukle() çağrılmış olmalı."""
-    global _istatistik
-    if _istatistik is None:
-        _istatistik = _bos_istatistik()
-    return _istatistik
-
-
-def ist_kaydet() -> None:
-    """Sync — disk ve background olarak Telegram'a yazar."""
-    if _istatistik is None:
-        return
-    _disk_kaydet()
-    # Async Telegram kaydını fire-and-forget tetikle (event loop varsa)
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_telegram_kaydet())
-    except RuntimeError:
-        pass   # event loop dışında, sessizce geç
-
-
-def ist_guncelle(kanal: str, magaza: str, kategori: str) -> None:
-    global _ist_degisim
-    ist = ist_yukle()
-    ist["toplam"] = ist.get("toplam", 0) + 1
-    ist["kanallar"][kanal]       = ist["kanallar"].get(kanal, 0) + 1
-    ist["magazalar"][magaza]     = ist["magazalar"].get(magaza, 0) + 1
-    ist["kategoriler"][kategori] = ist["kategoriler"].get(kategori, 0) + 1
-    bugun = simdi_tr().strftime("%Y-%m-%d")
-    ist["gunluk"][bugun] = ist["gunluk"].get(bugun, 0) + 1
-    _ist_degisim += 1
-    if _ist_degisim >= 5:           # Her 5 güncellemede bir kalıcılaştır
-        ist_kaydet()
-        _ist_degisim = 0
-
-
 async def periyodik_kaydet(aralik: int = 600) -> None:
-    """Arka plan görevi: her N saniyede bir Telegram'a istatistik kaydet."""
+    """Arka plan: her N saniyede bir Telegram'a backup atar."""
     while True:
         await asyncio.sleep(aralik)
-        if _ist_degisim > 0:
+        try:
             await _telegram_kaydet()
-            _disk_kaydet()
-            globals()["_ist_degisim"] = 0
+        except Exception as e:
+            log("UYARI", f"Periyodik kayıt: {e}")
+
+
+async def gunluk_yedek() -> None:
+    """#7 — Günde 1 kez tam SQLite dump'ı Telegram'a yolla."""
+    while True:
+        # Sabah 04:00'te yedekle (en sakin saat)
+        from datetime import timedelta
+        simdi = simdi_tr()
+        hedef = simdi.replace(hour=4, minute=0, second=0, microsecond=0)
+        if simdi >= hedef:
+            hedef += timedelta(days=1)
+        bekle = (hedef - simdi).total_seconds()
+        await asyncio.sleep(bekle)
+
+        if not _tg_client or not config.ADMIN_ID:
+            continue
+
+        try:
+            admin_id = int(config.ADMIN_ID)
+            # DB dosyasını binary olarak yolla
+            if os.path.exists(db.DB_FILE):
+                await _tg_client.send_file(
+                    admin_id,
+                    db.DB_FILE,
+                    caption=f"📦 Günlük yedek — {simdi_tr().strftime('%Y-%m-%d')}",
+                )
+                log("OK", "Günlük yedek Telegram'a yollandı")
+        except Exception as e:
+            log("UYARI", f"Günlük yedek: {e}")
