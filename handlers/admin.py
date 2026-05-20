@@ -32,6 +32,10 @@ _YARDIM = (
     "/temizle — Görülmüş önbelleği sıfırla\n"
     "/durdur — Gönderimi duraklat\n"
     "/baslat — Gönderimi devam ettir\n"
+    "<b>ML Komutları:</b>\n"
+    "/mlistatistik — ML model durumu\n"
+    "/egit &lt;kategori&gt; &lt;metin&gt; — Yeni eğitim örneği\n"
+    "/tahmin &lt;metin&gt; — Bir metin için kategori tahmin et\n"
     "/yardim — Bu listeyi göster"
 )
 
@@ -56,7 +60,10 @@ Satın almadan önce mutlaka kontrol edin.
 
 async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
     """Gelen komutu işler. Hem bot hem user client için ortak."""
-    komut = (event.message.text or "").strip().lower().split()[0]
+    full_text = (event.message.text or "").strip()
+    parcalar = full_text.split(maxsplit=1)
+    komut = parcalar[0].lower() if parcalar else ""
+    mesaj_metin = parcalar[1] if len(parcalar) > 1 else ""
 
     try:
         if komut in ("/yardim", "/help", "/start"):
@@ -123,6 +130,15 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/tani":
             await _tani_raporu(event)
+
+        elif komut == "/mlistatistik":
+            await _ml_istatistik(event)
+
+        elif komut == "/egit":
+            await _ml_egit(event, mesaj_metin)
+
+        elif komut == "/tahmin":
+            await _ml_tahmin(event, mesaj_metin)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -212,6 +228,7 @@ async def _tani_raporu(event) -> None:
         "services.gorsel":       ["logo_ekle"],
         "utils.log":             ["simdi_tr", "TR_TZ"],
         "utils.cache":           ["telegram_yukle", "periyodik_kaydet"],
+        "utils.ml_kategori":     ["tahmin", "egit_tek", "ilk_kurulum"],
         "handlers.mesaj":        ["_blok_analiz"],
     }
 
@@ -236,9 +253,100 @@ async def _tani_raporu(event) -> None:
     else:
         satirlar.insert(2, f"<b>⚠️ {toplam_eksik} eksik bulundu — dosyalar eski!</b>")
         satirlar.append("")
-        satirlar.append("Çözüm: firsatpulsu_v13.zip'i yeniden yükle, tüm dosyaların üzerine yaz.")
+        satirlar.append("Çözüm: firsatpulsu_v16.zip'i yeniden yükle, tüm dosyaların üzerine yaz.")
 
     await event.reply("\n".join(satirlar), parse_mode="html")
+
+
+async def _ml_istatistik(event) -> None:
+    """ML model durumu raporla."""
+    try:
+        from utils import ml_kategori
+        ist = ml_kategori.istatistik()
+        satirlar = [
+            "🤖 <b>ML Kategori Modeli</b>",
+            "",
+            f"📚 Toplam örnek: <b>{ist['toplam_ornek']}</b>",
+            f"🧠 Vocabulary: <b>{ist['vocab_boyut']}</b> token",
+            f"📂 Kategori sayısı: <b>{ist['kategori_sayi']}</b>",
+            "",
+            "<b>Kategori başına örnek:</b>",
+        ]
+        for kat, sayi in sorted(ist["kategori_sayilari"].items(), key=lambda x: -x[1]):
+            satirlar.append(f"  {kat:12} {sayi}")
+        satirlar.append("")
+        satirlar.append("<i>Komutlar:</i>")
+        satirlar.append("  /egit &lt;kategori&gt; &lt;metin&gt;")
+        satirlar.append("  /tahmin &lt;metin&gt;")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ ML modülü hatası: {e}")
+
+
+async def _ml_egit(event, mesaj_metin: str) -> None:
+    """Tek bir eğitim örneği ekle.
+    Kullanım: /egit elektronik Bosch akülü süpürge"""
+    if not mesaj_metin:
+        await event.reply(
+            "Kullanım: <code>/egit &lt;kategori&gt; &lt;metin&gt;</code>\n\n"
+            "Kategoriler: elektronik, giyim, kozmetik, ev, market, "
+            "spor, oyun, bebek, saglik, otomotiv",
+            parse_mode="html",
+        )
+        return
+
+    parcalar = mesaj_metin.strip().split(maxsplit=1)
+    if len(parcalar) < 2:
+        await event.reply("⚠️ Eksik parametre. <code>/egit elektronik metin</code>", parse_mode="html")
+        return
+
+    kategori, metin = parcalar[0].lower(), parcalar[1]
+    if kategori not in config.KATEGORILER:
+        await event.reply(
+            f"⚠️ Geçersiz kategori: <code>{kategori}</code>\n"
+            f"Geçerli: {', '.join(config.KATEGORILER.keys())}",
+            parse_mode="html",
+        )
+        return
+
+    try:
+        from utils import ml_kategori
+        ml_kategori.egit_toplu([(metin, kategori)])
+        # Tahmin et, doğrulukla göster
+        kat, guven = ml_kategori.tahmin(metin)
+        await event.reply(
+            f"✅ Eğitildi: <code>{kategori}</code>\n"
+            f"📦 Metin: {metin}\n"
+            f"🤖 Şimdiki tahmin: <code>{kat}</code> ({int(guven*100)}%)",
+            parse_mode="html",
+        )
+    except Exception as e:
+        await event.reply(f"❌ Eğitim hatası: {e}")
+
+
+async def _ml_tahmin(event, mesaj_metin: str) -> None:
+    """Bir metin için ML tahminini göster.
+    Kullanım: /tahmin Bosch akülü süpürge"""
+    if not mesaj_metin:
+        await event.reply("Kullanım: <code>/tahmin &lt;ürün metni&gt;</code>", parse_mode="html")
+        return
+
+    try:
+        from utils import ml_kategori
+        kat, guven = ml_kategori.tahmin(mesaj_metin)
+        # Keyword karşılaştırması için kategori_bul'u da çalıştır
+        from services.analiz import kategori_bul
+        hibrit_kat, _, _ = kategori_bul(mesaj_metin)
+
+        await event.reply(
+            f"📦 <b>Metin:</b> {mesaj_metin[:200]}\n\n"
+            f"🤖 <b>ML tahmini:</b> <code>{kat}</code> (%{int(guven*100)})\n"
+            f"🎯 <b>Hibrit sonuç:</b> <code>{hibrit_kat}</code>\n\n"
+            f"<i>Yanlışsa: /egit &lt;doğru_kategori&gt; {mesaj_metin[:50]}</i>",
+            parse_mode="html",
+        )
+    except Exception as e:
+        await event.reply(f"❌ Tahmin hatası: {e}")
 
 
 async def _hosgeldin_pinle(event) -> None:

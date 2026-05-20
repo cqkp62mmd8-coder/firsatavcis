@@ -4,6 +4,7 @@ Kaynak kanallardan gelen yeni mesajları dinler, filtreler ve kuyruğa ekler.
 - Çok ürünlü mesaj: tek mesajda 2 ürün birleştirilir (1 mesaj, 2 buton)
 """
 import asyncio
+import re
 
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageMediaPhoto
@@ -23,12 +24,32 @@ from utils.cache import gorulmus_var_mi, gorulmus_ekle
 from utils.log import log
 
 
+def _kara_liste_eslesir(metin: str) -> bool:
+    """Kara liste kelimesi tam kelime olarak metin içinde geçiyor mu?
+    'tablet kalem' → 'kalem' yakalanmalı (boşluk sınırı)
+    'kalemini' → 'kalem' yakalanmamalı (kelime uzantısı)
+    'kitaplık' → 'kitap' yakalanmamalı (uzantı)"""
+    if not metin:
+        return False
+    ml = metin.lower()
+    for kelime in config.KARA_LISTE:
+        # Çok kelimeli ise direkt substring (örn "ekran koruyucu")
+        if " " in kelime:
+            if kelime in ml:
+                return True
+        else:
+            # Tek kelime → kelime sınırı ile ara
+            if re.search(r"\b" + re.escape(kelime) + r"\b", ml):
+                return True
+    return False
+
+
 def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
     """Bir bloğu analiz edip dict döner; geçersizse None.
     Regex zayıf kalırsa (link var ama indirim/ürün adı bulunamamış) LLM fallback dener."""
     onizleme = blok[:50].replace("\n", " ")
 
-    if any(yasak in blok.lower() for yasak in config.KARA_LISTE):
+    if _kara_liste_eslesir(blok):
         log("FILTRE", f"Kara liste → atlandı: '{onizleme}…'")
         return None
 
