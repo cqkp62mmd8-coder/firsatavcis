@@ -301,11 +301,72 @@ def magaza_bul(metin: str, link: str | None = None) -> str:
 
 
 def kategori_bul(metin: str) -> tuple[str, str, list[str]]:
+    """Hibrit kategori tespiti — keyword tabanlı + ML destekli.
+
+    Mantık:
+      1. Keyword-bazlı skoru hesapla (kesin kurallar)
+      2. ML tahminini al
+      3. İkisi anlaşırsa → o kategori
+      4. Anlaşamazsa → keyword skorunun yüksek olduğu kazanır (multi-word match)
+      5. Keyword hiç eşleşmezse → ML kategori (eğer güven >= 0.4)
+      6. Hâlâ belirsizse → 'genel'"""
     ml = (metin or "").lower()
+    if not ml:
+        return "genel", "🛍️", ["#Fırsat", "#İndirim"]
+
+    # ── 1. Keyword skorları ──
+    keyword_skorlar: dict[str, int] = {}
     for kat_adi, kat in config.KATEGORILER.items():
-        if any(a in ml for a in kat["anahtar"]):
-            return kat_adi, kat["ikon"], kat["hashtag"]
-    return "genel", "🛍️", ["#Fırsat", "#İndirim"]
+        skor = 0
+        for anahtar in kat["anahtar"]:
+            if len(anahtar) < 4:
+                if re.search(r"\b" + re.escape(anahtar) + r"\b", ml):
+                    skor += 1
+            elif anahtar in ml:
+                # Multi-word anahtarlar (örn 'akülü süpürge') yüksek puan
+                skor += len(anahtar.split()) * 10 + 1
+        if skor > 0:
+            keyword_skorlar[kat_adi] = skor
+
+    keyword_kat = max(keyword_skorlar.items(), key=lambda x: x[1])[0] if keyword_skorlar else None
+    keyword_skor = keyword_skorlar.get(keyword_kat, 0) if keyword_kat else 0
+
+    # ── 2. ML tahmini ──
+    ml_kat, ml_guven = None, 0.0
+    try:
+        from utils import ml_kategori
+        ml_kat, ml_guven = ml_kategori.tahmin(metin)
+        if ml_kat == "genel":
+            ml_kat = None
+    except Exception:
+        pass
+
+    # ── 3. Karar mantığı ──
+    secilen = None
+    if keyword_kat and ml_kat and keyword_kat == ml_kat:
+        # İkisi aynı → kesin
+        secilen = keyword_kat
+    elif keyword_skor >= 22:
+        # Güçlü multi-word match (2+ kelimeli anahtar) → keyword öncelikli
+        secilen = keyword_kat
+    elif keyword_skor >= 11 and ml_guven < 0.5:
+        # Orta keyword + zayıf ML → keyword
+        secilen = keyword_kat
+    elif ml_kat and ml_guven >= 0.5:
+        # Yüksek ML güveni → ML
+        secilen = ml_kat
+    elif keyword_kat:
+        # Düşük skorlar → keyword fallback
+        secilen = keyword_kat
+    elif ml_kat and ml_guven >= 0.3:
+        # Hiç keyword yok, orta ML güveni → ML
+        secilen = ml_kat
+
+    if not secilen:
+        return "genel", "🛍️", ["#Fırsat", "#İndirim"]
+
+    kat = config.KATEGORILER[secilen]
+    return secilen, kat["ikon"], kat["hashtag"]
 
 
 def stok_kritik_mi(metin: str) -> bool:
@@ -388,12 +449,22 @@ def urun_adi_bul(metin: str) -> str | None:
         re.I,
     )
 
+    # E-ticaret SİTELERİ — ürün adı sayılmaz (Amazon, Trendyol gibi)
+    _SITE_ADLARI = re.compile(
+        r"^(?:amazon(?:\s*tr)?|trendyol|hepsiburada|mediamarkt|teknosa|"
+        r"n11|gratis|boyner|çiçeksepeti|cicek\s*sepeti|aliexpress|temu|"
+        r"e-ticaret|migros|carrefour|a101|bim|şok)\s*[®©™]?\s*$",
+        re.I,
+    )
+
     def _etiket_satiri_mi(satir: str) -> bool:
-        """'İndirimli Fiyat:' gibi etiket satırı mı."""
-        temiz = emoji_temizle(satir).strip(" -–—,.:|").strip()
+        """'İndirimli Fiyat:' veya 'Amazon TR' gibi 'gerçek ürün adı değil' satırı mı."""
+        temiz = emoji_temizle(satir).strip(" -–—,.:|🛒🏪🛍️").strip()
         if not temiz:
             return True
         if _ETIKET_KELIME.match(temiz):
+            return True
+        if _SITE_ADLARI.match(temiz):
             return True
         return False
 
@@ -652,7 +723,10 @@ def indirim_yildiz(indirim: int) -> str:
 # ════════════════════════════════════════════════════════════════
 
 # 🔻 satır başı → kesin ürün ayırıcısı
-_YENI_URUN = re.compile(r"^🔻", re.UNICODE)
+_YENI_URUN = re.compile(
+    r"^[🔻🔥📦🛍️⚡🎯💎🆕]\s*\S",   # ürün başlığı sayılan emoji'lerden biriyle başlıyor
+    re.UNICODE,
+)
 
 
 def _paylasilan_mi(blok: str) -> bool:
@@ -693,15 +767,26 @@ def _urun_paragrafi_mi(paragraf: str) -> bool:
 
 
 def _paragraf_ici_bol(paragraf: str) -> list[str]:
-    """🔻 ile başlayan satırları ayrı ürün bloğu yapar."""
+    """Aynı paragrafta birden fazla ürün başlığı varsa ayır.
+    Sadece şu durumda bölecek: yeni satır ürün-emoji ile başlıyor VE
+    aynı paragrafta zaten fiyat/yüzde kalıbı var."""
     satirlar = paragraf.split("\n")
     bloklar, mevcut = [], []
     for satir in satirlar:
-        if _YENI_URUN.match(satir.strip()) and mevcut:
-            bloklar.append("\n".join(mevcut))
-            mevcut = [satir]
-        else:
-            mevcut.append(satir)
+        s_strip = satir.strip()
+        # Yeni ürün başlığı (emoji + harf-kelime) ve önceden bir şey biriktirdik
+        # mevcut bloğun ürünsel olduğunu kontrol et — fiyat ya da %
+        if _YENI_URUN.match(s_strip) and mevcut:
+            onceki = "\n".join(mevcut)
+            # Önceki blok gerçek bir ürün içeriyor mu? (fiyat/yüzde varsa evet)
+            if re.search(r"[\d.,]+\s*(?:TL|₺|lira)", onceki, re.I) or re.search(r"%\d+|\d+%", onceki):
+                # Yeni satır da kelime-bazlı içerik olmalı (en az 8 karakter, en az 1 harf)
+                temizSatir = re.sub(r"[🔻🔥📦🛍️⚡🎯💎🆕\s]+", "", s_strip)
+                if len(temizSatir) >= 5 and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temizSatir):
+                    bloklar.append(onceki)
+                    mevcut = [satir]
+                    continue
+        mevcut.append(satir)
     if mevcut:
         bloklar.append("\n".join(mevcut))
     return bloklar

@@ -45,14 +45,22 @@ def negatif_mi(metin: str) -> bool:
 # Son 60 dakikadaki mağaza adlarını tutar
 _son_magazalar: deque = deque(maxlen=50)
 
+# Bu mağazalar "marka" değil, "site" — trend rozeti gösterme
+_SITELER = {
+    "Amazon TR", "Trendyol", "Hepsiburada", "MediaMarkt", "Teknosa",
+    "N11", "Gratis", "Boyner", "Çiçeksepeti", "AliExpress", "Temu",
+    "E-Ticaret",
+}
+
 
 def trend_kaydet(magaza: str) -> None:
     _son_magazalar.append((magaza, time.time()))
 
 
 def trend_var_mi(magaza: str) -> bool:
-    """Son 1 saatte aynı mağazadan 3+ ürün varsa trend say."""
-    if not magaza or magaza == "E-Ticaret":
+    """Son 1 saatte aynı MARKADAN 3+ ürün varsa trend say.
+    Site adları (Amazon, Trendyol vs.) trend olmaz — onlar zaten her zaman görünür."""
+    if not magaza or magaza in _SITELER:
         return False
     simdi_ts = time.time()
     sayi = sum(1 for m, t in _son_magazalar if m == magaza and simdi_ts - t < 3600)
@@ -97,19 +105,14 @@ def _baslik(indirim: int, tur: str, fs: float, tasarruf: int) -> str:
             return f"💎 <b>ELİT MARKA KAMPANYASI — %{indirim}'ye varan</b>"
         return f"🏷️ <b>MARKA KAMPANYASI — %{indirim}'ye varan</b>"
 
-    # Ürün — tek başlık + tasarruf
+    # Ürün — sadece %
     if vip:
-        baslik = f"💎 <b>ELİT FIRSAT — %{indirim} İNDİRİM</b>"
-    elif indirim >= 50:
-        baslik = f"🎯 <b>%{indirim} İNDİRİM</b>"
-    elif indirim >= 30:
-        baslik = f"💰 <b>%{indirim} İNDİRİM</b>"
-    else:
-        baslik = f"<b>%{indirim} İNDİRİM</b>"
-
-    if tasarruf >= 50:
-        baslik += f"  •  💸 <b>{_tasarruf_format(tasarruf)} TL tasarruf</b>"
-    return baslik
+        return f"💎 <b>ELİT FIRSAT — %{indirim} İNDİRİM</b>"
+    if indirim >= 50:
+        return f"🎯 <b>%{indirim} İNDİRİM</b>"
+    if indirim >= 30:
+        return f"💰 <b>%{indirim} İNDİRİM</b>"
+    return f"<b>%{indirim} İNDİRİM</b>"
 
 
 # ── Hashtag ─────────────────────────────────────────────────────
@@ -180,8 +183,10 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
         s.append("")
         if urun:
             s.append(f"<b>{urun}</b>")
+        elif kat != "genel":
+            s.append(f"<b>{kat_yazi} fırsatı</b>")
         else:
-            s.append(f"<b>{magaza} — {kat_yazi}</b>")
+            s.append(f"<b>İndirimli ürün</b>")
         s.append("")
         # Fiyat: temiz, çift satır
         if eski_s and yeni_s:
