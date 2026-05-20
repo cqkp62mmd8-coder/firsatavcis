@@ -2,27 +2,19 @@
 #11 — Stok takip: bot mesaj atınca, N saat sonra ürün linkini kontrol eder.
 Stok yoksa mesajı edit ederek "❌ TÜKENDİ" etiketi ekler.
 
-#7 PERSISTENCE:
-  • Bekleyen kayıtlar JSON dosyasına yazılır (atomic write).
-  • Bot restart olsa bile 6 saat bekleyen ürünler unutulmaz.
+#3 — Bekleyenler artık SQLite'ta (db.stok_takip tablosu).
+Bot restart olsa bile veriler korunur.
 """
 import asyncio
-import json
-import os
 import re
-import tempfile
 import urllib.request
 import urllib.error
 
 import config
+from utils import db
 from utils.log import log, simdi_tr
 
-# Bekleyen kayıtlar
-_bekleyen: list[dict] = []
-_yuklendi = False
 _MAX_KAYIT = 200
-_STOK_FILE = os.path.join(config.DATA_DIR, "stok_bekleyen.json")
-
 
 # Stok yok pattern'leri
 _TUKENDI_KALIPLAR = [
@@ -38,49 +30,31 @@ _TUKENDI_KALIPLAR = [
 _TUKENDI_RE = re.compile("|".join(_TUKENDI_KALIPLAR), re.I)
 
 
-def _yukle() -> None:
-    """JSON'dan bekleyenleri yükle (bir kere, lazy)."""
-    global _bekleyen, _yuklendi
-    if _yuklendi:
-        return
-    _yuklendi = True
-    try:
-        with open(_STOK_FILE) as f:
-            _bekleyen = json.load(f)
-        log("OK", f"Stok bekleyen yüklendi: {len(_bekleyen)} kayıt")
-    except Exception:
-        _bekleyen = []
-
-
-def _kaydet() -> None:
-    """JSON'a atomik yaz: tempfile + rename. Crash sırasında bozulmaz."""
-    try:
-        dn = os.path.dirname(_STOK_FILE) or "."
-        with tempfile.NamedTemporaryFile(
-            mode="w", dir=dn, delete=False, suffix=".tmp", encoding="utf-8"
-        ) as f:
-            json.dump(_bekleyen, f, ensure_ascii=False)
-            geçici = f.name
-        os.replace(geçici, _STOK_FILE)
-    except Exception as e:
-        log("UYARI", f"Stok bekleyen kaydetme: {e}")
-
-
 def kayit_ekle(msg, link: str) -> None:
-    """Yeni gönderilen mesajı stok takip listesine ekle."""
+    """Yeni gönderilen mesajı stok takip listesine ekle (SQLite)."""
     if config.STOK_KONTROL_SAAT <= 0 or not link or not msg:
         return
-    _yukle()
-    _bekleyen.append({
-        "msg_id":  msg.id,
-        "kanal":   config.HEDEF_KANAL,
-        "link":    link,
-        "metin":   (msg.text or "")[:3500],   # Telegram limit
-        "eklendi": simdi_tr().timestamp(),
-    })
-    while len(_bekleyen) > _MAX_KAYIT:
-        _bekleyen.pop(0)
-    _kaydet()
+    try:
+        with db.cursor() as c:
+            c.execute("""
+                INSERT OR REPLACE INTO stok_takip(msg_id, kanal, link, metin, eklendi_ts)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                msg.id, config.HEDEF_KANAL, link,
+                (msg.text or "")[:3500],
+                simdi_tr().timestamp(),
+            ))
+            # Limit
+            c.execute("SELECT COUNT(*) FROM stok_takip")
+            sayi = c.fetchone()[0]
+            if sayi > _MAX_KAYIT:
+                fazla = sayi - _MAX_KAYIT
+                c.execute("""
+                    DELETE FROM stok_takip
+                    WHERE id IN (SELECT id FROM stok_takip ORDER BY eklendi_ts ASC LIMIT ?)
+                """, (fazla,))
+    except Exception as e:
+        log("UYARI", f"Stok kayıt: {e}")
 
 
 def _stokta_var_mi(link: str) -> bool | None:
@@ -114,7 +88,6 @@ def _stokta_var_mi(link: str) -> bool | None:
 
 async def kontrol_dongusu(client) -> None:
     """Arka plan görevi: 10 dakikada bir bekleyenleri kontrol eder."""
-    _yukle()
     if config.STOK_KONTROL_SAAT <= 0:
         log("BILGI", "Stok takip devre dışı (STOK_KONTROL_SAAT=0)")
         return
@@ -126,7 +99,16 @@ async def kontrol_dongusu(client) -> None:
         try:
             simdi = simdi_tr().timestamp()
             hedef_yas = config.STOK_KONTROL_SAAT * 3600
-            isle = [k for k in _bekleyen if simdi - k["eklendi"] >= hedef_yas]
+            esik = simdi - hedef_yas
+
+            # Yaşı dolmuş kayıtları çek
+            with db.cursor() as c:
+                c.execute(
+                    "SELECT id, msg_id, kanal, link, metin FROM stok_takip WHERE eklendi_ts <= ?",
+                    (esik,),
+                )
+                isle = c.fetchall()
+
             if not isle:
                 continue
 
@@ -145,11 +127,12 @@ async def kontrol_dongusu(client) -> None:
                             log("OK", f"Tükendi etiketi eklendi (msg {kayit['msg_id']})")
                         except Exception as e:
                             log("UYARI", f"Mesaj edit hatası: {e}")
-                    if kayit in _bekleyen:
-                        _bekleyen.remove(kayit)
+                    # Sonuç ne olursa olsun kayıttan sil
+                    with db.cursor() as c:
+                        c.execute("DELETE FROM stok_takip WHERE id=?", (kayit["id"],))
                     await asyncio.sleep(2)
                 except Exception as e:
                     log("UYARI", f"Stok kontrol döngüsü: {e}")
-            _kaydet()
+
         except Exception as e:
             log("HATA", f"Stok takip: {e}")

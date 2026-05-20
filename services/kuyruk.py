@@ -1,20 +1,28 @@
 """
-Kuyruk worker: kuyruktaki mesajları 3 dakika arayla kanala gönderir.
-Tuple formatı: (sablon, gorsel, lnk, magaza, kat, kanal_adi, indirim, fs, extra_lnk?)
-  extra_lnk → varsa 2. ürün butonu eklenir (çoklu fırsat mesajları)
+Kuyruk worker: kuyruktaki mesajları KUYRUK_BEKLEME saniye arayla kanala gönderir.
+
+#4 — FloodWaitError yakalama + adaptif bekleme
+#10 — Supervisor pattern (worker patlasa otomatik yeniden başlar)
 """
 import asyncio
 from io import BytesIO
 
 from telethon import TelegramClient
+from telethon.errors import FloodWaitError, RPCError
 
 import config
 import state
 from services.gorsel import logo_ekle
 from utils.cache import ist_guncelle
+from utils import metrik
 from utils.log import log, gece_modu_aktif
 
 _MAX_RETRY = 3
+
+# #4 — FloodWait sonrası adaptif bekleme süresi çarpanı
+# Her FloodWait alındığında bir sonraki gönderim daha yavaş olur
+_floodwait_carpani: float = 1.0
+_son_floodwait_zaman: float = 0.0
 
 
 def _aktif_bekleme() -> int:
@@ -83,10 +91,27 @@ def _buton_olustur(link: str, bot_client_var: bool, extra_lnk: str | None = None
 # ── Retry ───────────────────────────────────────────────────────
 
 async def _gonder_retry(gonderi_client, hedef, metin, **kw):
+    """#4 — Exponential backoff + FloodWait özel yakalama."""
+    global _floodwait_carpani, _son_floodwait_zaman
+    import time as _time
+
     son_hata = None
     for attempt in range(_MAX_RETRY):
         try:
             return await gonderi_client.send_message(hedef, metin, **kw)
+        except FloodWaitError as e:
+            log("UYARI", f"FloodWait {e.seconds}s — Telegram limit")
+            metrik.kayit("floodwait", veri={"sn": e.seconds, "attempt": attempt})
+            _son_floodwait_zaman = _time.time()
+            _floodwait_carpani = min(_floodwait_carpani * 1.5, 4.0)
+            log("BILGI", f"Bekleme çarpanı → {_floodwait_carpani:.1f}x")
+            await asyncio.sleep(e.seconds + 2)
+            son_hata = e
+        except RPCError as e:
+            son_hata = e
+            log("UYARI", f"RPC hata ({attempt+1}/{_MAX_RETRY}): {e}")
+            if attempt < _MAX_RETRY - 1:
+                await asyncio.sleep(5 * (2 ** attempt))
         except Exception as e:
             son_hata = e
             if attempt < _MAX_RETRY - 1:
@@ -94,6 +119,17 @@ async def _gonder_retry(gonderi_client, hedef, metin, **kw):
                 log("UYARI", f"Gönderim hatası ({attempt+1}/{_MAX_RETRY}): {e} — {bekle}s")
                 await asyncio.sleep(bekle)
     raise son_hata
+
+
+def _bekleme_carpani_aktif() -> float:
+    """Son FloodWait'ten sonra zamanla normal çarpana dön."""
+    global _floodwait_carpani
+    import time as _time
+    if _floodwait_carpani > 1.0:
+        gecen = _time.time() - _son_floodwait_zaman
+        if gecen > 3600:
+            _floodwait_carpani = max(1.0, _floodwait_carpani * 0.7)
+    return _floodwait_carpani
 
 
 # ── Worker ──────────────────────────────────────────────────────
@@ -177,6 +213,19 @@ async def worker(
             tip = "çoklu" if extra_lnk else "tekli"
             log("OK", f"Gönderildi [{magaza}] %{indirim} ({tip}) | kuyruk={kuyruk.qsize()}")
 
+            # #6 Health endpoint için heartbeat
+            try:
+                from services import health
+                health.son_mesaj_kaydet()
+            except Exception:
+                pass
+
+            # #14 — Telemetri kaydı
+            metrik.kayit("paylasildi",
+                magaza=magaza, kategori=kat, kaynak=kanal_adi,
+                indirim=indirim, skor=fs_skor,
+                veri={"tip": tip})
+
             # #11 Stok takibe kaydet
             if msg and lnk:
                 try:
@@ -186,7 +235,9 @@ async def worker(
                     log("UYARI", f"Stok takip kayıt: {e}")
 
             kuyruk.task_done()
-            await asyncio.sleep(_aktif_bekleme())
+            # #4 — FloodWait sonrası adaptif bekleme
+            bekle_sn = int(_aktif_bekleme() * _bekleme_carpani_aktif())
+            await asyncio.sleep(bekle_sn)
 
         except Exception as e:
             log("HATA", f"Worker: {type(e).__name__}: {e}")
