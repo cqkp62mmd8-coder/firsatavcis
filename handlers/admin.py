@@ -236,7 +236,7 @@ async def _tani_raporu(event) -> None:
     else:
         satirlar.insert(2, f"<b>⚠️ {toplam_eksik} eksik bulundu — dosyalar eski!</b>")
         satirlar.append("")
-        satirlar.append("Çözüm: firsatpulsu_v12.zip'i yeniden yükle, tüm dosyaların üzerine yaz.")
+        satirlar.append("Çözüm: firsatpulsu_v13.zip'i yeniden yükle, tüm dosyaların üzerine yaz.")
 
     await event.reply("\n".join(satirlar), parse_mode="html")
 
