@@ -156,7 +156,17 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     etiket       = _ozel_etiket(metin)
     kupon        = kupon_bul(metin)
     min_sip      = min_siparis_bul(metin)
-    kat_yazi     = config.KATEGORI_YAZI.get(kat, "Alışveriş")
+
+    # Alt-kategori bilgisi (hiyerarşik) — şablon yazısı için
+    try:
+        from services.analiz import kategori_bul_tam
+        from utils.ml_kategoriler import kategori_bilgisi
+        ana_k, alt_k, _ = kategori_bul_tam(metin)
+        bilgi = kategori_bilgisi(ana_k, alt_k or None)
+        kat_yazi = bilgi.get("yazi", config.KATEGORI_YAZI.get(kat, "Alışveriş"))
+    except Exception:
+        kat_yazi = config.KATEGORI_YAZI.get(kat, "Alışveriş")
+
     fs           = firsat_skoru(metin, indirim, btn_links)
     tasarruf     = _tasarruf_hesapla(eski_v, yeni_v)
 
@@ -232,6 +242,16 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None) -
     lnk = link_bul(metin, bl)
     mag = magaza_bul(metin, lnk)
     kat, _, kat_tags = kategori_bul(metin)
+    # Alt kategori hashtag varsa, daha spesifik etiket için onu kullan
+    try:
+        from services.analiz import kategori_bul_tam
+        from utils.ml_kategoriler import kategori_bilgisi
+        ana_k, alt_k, _ = kategori_bul_tam(metin)
+        if alt_k:
+            alt_bilgi = kategori_bilgisi(ana_k, alt_k)
+            kat_tags = alt_bilgi.get("hashtag", kat_tags)
+    except Exception:
+        pass
     kanal   = config.HEDEF_KANAL.lstrip("@")
     hashtag = _hashtag(kat_tags, mag)
 

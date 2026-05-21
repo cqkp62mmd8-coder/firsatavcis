@@ -301,72 +301,65 @@ def magaza_bul(metin: str, link: str | None = None) -> str:
 
 
 def kategori_bul(metin: str) -> tuple[str, str, list[str]]:
-    """Hibrit kategori tespiti — keyword tabanlı + ML destekli.
+    """ML-only hiyerarşik kategori tespiti.
 
     Mantık:
-      1. Keyword-bazlı skoru hesapla (kesin kurallar)
-      2. ML tahminini al
-      3. İkisi anlaşırsa → o kategori
-      4. Anlaşamazsa → keyword skorunun yüksek olduğu kazanır (multi-word match)
-      5. Keyword hiç eşleşmezse → ML kategori (eğer güven >= 0.4)
-      6. Hâlâ belirsizse → 'genel'"""
-    ml = (metin or "").lower()
-    if not ml:
+      • ML modelinden 'ana:alt' formatı tahmin al
+      • Yüksek güven (>= 0.35) → ML sonucu kullan
+      • Düşük güven → 'genel' kategorisi (belirsiz kuyruğa eklenir)
+
+    Döner: (ana_kategori, ikon, hashtag_listesi)
+
+    Not: Tam tahmin sonucu (ana:alt) için kategori_bul_tam() kullanın."""
+    if not metin:
         return "genel", "🛍️", ["#Fırsat", "#İndirim"]
 
-    # ── 1. Keyword skorları ──
-    keyword_skorlar: dict[str, int] = {}
-    for kat_adi, kat in config.KATEGORILER.items():
-        skor = 0
-        for anahtar in kat["anahtar"]:
-            if len(anahtar) < 4:
-                if re.search(r"\b" + re.escape(anahtar) + r"\b", ml):
-                    skor += 1
-            elif anahtar in ml:
-                # Multi-word anahtarlar (örn 'akülü süpürge') yüksek puan
-                skor += len(anahtar.split()) * 10 + 1
-        if skor > 0:
-            keyword_skorlar[kat_adi] = skor
-
-    keyword_kat = max(keyword_skorlar.items(), key=lambda x: x[1])[0] if keyword_skorlar else None
-    keyword_skor = keyword_skorlar.get(keyword_kat, 0) if keyword_kat else 0
-
-    # ── 2. ML tahmini ──
-    ml_kat, ml_guven = None, 0.0
     try:
         from utils import ml_kategori
-        ml_kat, ml_guven = ml_kategori.tahmin(metin)
-        if ml_kat == "genel":
-            ml_kat = None
-    except Exception:
-        pass
+        from utils.ml_kategoriler import KATEGORI_AGAC
 
-    # ── 3. Karar mantığı ──
-    secilen = None
-    if keyword_kat and ml_kat and keyword_kat == ml_kat:
-        # İkisi aynı → kesin
-        secilen = keyword_kat
-    elif keyword_skor >= 22:
-        # Güçlü multi-word match (2+ kelimeli anahtar) → keyword öncelikli
-        secilen = keyword_kat
-    elif keyword_skor >= 11 and ml_guven < 0.5:
-        # Orta keyword + zayıf ML → keyword
-        secilen = keyword_kat
-    elif ml_kat and ml_guven >= 0.5:
-        # Yüksek ML güveni → ML
-        secilen = ml_kat
-    elif keyword_kat:
-        # Düşük skorlar → keyword fallback
-        secilen = keyword_kat
-    elif ml_kat and ml_guven >= 0.3:
-        # Hiç keyword yok, orta ML güveni → ML
-        secilen = ml_kat
+        tam_kat, guven = ml_kategori.tahmin(metin)
+        if not tam_kat or tam_kat == "genel":
+            return "genel", "🛍️", ["#Fırsat", "#İndirim"]
 
-    if not secilen:
+        # Hiyerarşik formatı parse et
+        ana = tam_kat.split(":", 1)[0]
+
+        # Çok düşük güven → belirsiz kuyruğuna ekle, genel döndür
+        if guven < 0.25:
+            try:
+                ml_kategori.belirsiz_kaydet(metin, tam_kat, guven)
+            except Exception:
+                pass
+            return "genel", "🛍️", ["#Fırsat", "#İndirim"]
+
+        if ana not in KATEGORI_AGAC:
+            return "genel", "🛍️", ["#Fırsat", "#İndirim"]
+
+        bilgi = KATEGORI_AGAC[ana]
+        return ana, bilgi["ikon"], bilgi["hashtag"]
+
+    except Exception as e:
+        # ML modülü yoksa veya hata varsa
+        try:
+            from utils.log import log
+            log("UYARI", f"ML kategori hata: {e}")
+        except Exception:
+            pass
         return "genel", "🛍️", ["#Fırsat", "#İndirim"]
 
-    kat = config.KATEGORILER[secilen]
-    return secilen, kat["ikon"], kat["hashtag"]
+
+def kategori_bul_tam(metin: str) -> tuple[str, str, float]:
+    """Tam hiyerarşik kategori tahmini.
+    Döner: (ana_kategori, alt_kategori, güven_skoru)
+    Alt yoksa veya genel ise alt='' döner."""
+    if not metin:
+        return "genel", "", 0.0
+    try:
+        from utils import ml_kategori
+        return ml_kategori.tahmin_hiyerarsik(metin)
+    except Exception:
+        return "genel", "", 0.0
 
 
 def stok_kritik_mi(metin: str) -> bool:
