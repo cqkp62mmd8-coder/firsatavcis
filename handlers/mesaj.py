@@ -62,6 +62,13 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
             log("FILTRE", f"  Mevcut buton linkleri ({len(btn_links)}): {btn_links}")
         return None
 
+    # ── Somut TL fiyatı zorunlu — fiyatsız mesaj sızıntısını engelle ──
+    from services.analiz import fiyat_bul
+    _eski_fiyat, _yeni_fiyat, _, _ = fiyat_bul(blok)
+    if not _yeni_fiyat:
+        log("FILTRE", f"Fiyat bulunamadı → atlandı: '{onizleme}…'")
+        return None
+
     from services.analiz import urun_adi_bul
     urun = urun_adi_bul(blok)
 
@@ -96,22 +103,42 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
     kat, _, _ = kategori_bul(blok)
     fs = firsat_skoru(blok, indirim, btn_links)
 
-    # ── Otomatik öğrenme (v17) ──
-    # Ürün filtreyi geçti VE yüksek kaliteli (skor & indirim) ise
-    # ML'e yeni eğitim verisi olarak ekle.
-    # Sadece güvenli durumlarda — feedback loop'u önlemek için.
+    # ════════════════════════════════════════════════════════════
+    # Otomatik öğrenme (v17) — ML'i kendi kendine yetkin hale getir
+    # ════════════════════════════════════════════════════════════
+    #
+    # Strateji:
+    #  A) ML yüksek güvende ise (>=0.7) ve fırsat kaliteliyse → veriye ekle
+    #  B) ML belirsiz/düşük güvende (<0.55) → Claude'a sor (otomatik öğretmen)
+    #     - Cevap geldiyse kaynak="llm" olarak veriye ekle
+    #     - Ücretsiz değil ama kullanıcı manuel /ogret zahmetinden kurtulur
+    #  C) Sadece kaliteli ve uzun ürün adlarında öğren (gürültüyü engelle)
     try:
-        if (urun and skor >= 50 and indirim >= 25
-                and kat != "genel" and len(urun) >= 10):
+        if urun and skor >= 50 and indirim >= 25 and len(urun) >= 10:
             from utils import ml_kategori
             from services.analiz import kategori_bul_tam
             ana_k, alt_k, guven = kategori_bul_tam(blok)
-            # Sadece çok güvenli tahminler eklensin (loop'u önle)
-            if guven >= 0.6 and ana_k == kat and ana_k != "genel":
+
+            if guven >= 0.7 and ana_k == kat and ana_k != "genel":
+                # A) ML kendinden emin — direkt öğren
                 tam_kat = f"{ana_k}:{alt_k}" if alt_k else ana_k
                 ml_kategori.egit_tek(urun, tam_kat, kaynak="auto", hemen_egit=False)
-    except Exception:
-        pass
+
+            elif guven < 0.55 and llm.aktif_mi():
+                # B) ML belirsiz — Claude'a sor (otomatik öğretmen)
+                llm_kat = llm.kategori_sor(urun, baglam=blok[:300])
+                if llm_kat:
+                    llm_ana, llm_alt = llm_kat
+                    tam_kat = f"{llm_ana}:{llm_alt}" if llm_alt else llm_ana
+                    ml_kategori.egit_tek(urun, tam_kat, kaynak="llm", hemen_egit=False)
+                    # Mesaj için kategoriyi de güncelle — LLM otorite
+                    kat = llm_ana
+                else:
+                    # LLM cevap vermedi → belirsiz kuyruğa kaydet (sonra batch için)
+                    ml_kategori.belirsiz_kaydet(urun, ana_k, guven)
+    except Exception as e:
+        from utils.log import log as _l
+        _l("UYARI", f"Otomatik öğrenme hatası: {e}")
 
     return {
         "blok": blok, "indirim": indirim, "link": lnk,
@@ -194,6 +221,17 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 if event.message.media and isinstance(event.message.media, MessageMediaPhoto)
                 else None
             )
+            # Görseli HEMEN indir — kuyrukta 180sn bekleyince file_reference süresi dolar.
+            # `bytes` olarak gönderdiğimizde, expired reference sorunu olmaz.
+            gorsel_bytes: bytes | None = None
+            if gorsel is not None:
+                try:
+                    gorsel_bytes = await client.download_media(event.message, bytes)
+                    if gorsel_bytes and len(gorsel_bytes) < 1_000:
+                        gorsel_bytes = None   # çok küçük, kullanma
+                except Exception as e:
+                    log("UYARI", f"Görsel indirilemedi (kaynakta): {e}")
+                    gorsel_bytes = None
             kanal_adi = getattr(getattr(event, "chat", None), "username", None) or "bilinmiyor"
 
             bloklar = mesaj_bolum_ayir(ham)
@@ -225,7 +263,7 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 gunluk_ekle(a["blok"], a["indirim"], btn_links)
                 try:
                     kuyruk.put_nowait((
-                        sablon, gorsel, [a["link"]],
+                        sablon, gorsel_bytes, [a["link"]],
                         a["magaza"], a["kat"], kanal_adi,
                         a["indirim"], a["fs"],
                     ))
@@ -248,7 +286,7 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 gunluk_ekle(a1["blok"], a1["indirim"], btn_links)
                 try:
                     kuyruk.put_nowait((
-                        sablon, gorsel, [a1["link"]],
+                        sablon, gorsel_bytes, [a1["link"]],
                         a1["magaza"], a1["kat"], kanal_adi,
                         a1["indirim"], a1["fs"],
                     ))
@@ -273,7 +311,7 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
 
             try:
                 kuyruk.put_nowait((
-                    sablon, gorsel,
+                    sablon, gorsel_bytes,
                     [a1["link"], a2["link"]],   # 2 link → 2 buton
                     a1["magaza"], a1["kat"], kanal_adi,
                     max(a1["indirim"], a2["indirim"]),

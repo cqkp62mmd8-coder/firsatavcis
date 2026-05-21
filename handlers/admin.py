@@ -39,7 +39,8 @@ _YARDIM = (
     "/altkat — Tüm kategori hiyerarşisini listele\n"
     "/kfold — 5-fold cross validation (doğruluk testi)\n"
     "/aktiog — Belirsiz tahminleri listele\n"
-    "/ogret &lt;sira&gt; &lt;ana:alt&gt; — Belirsizi etiketle\n"
+    "/ogret &lt;sira&gt; &lt;ana:alt&gt; — Belirsizi manuel etiketle\n"
+    "/llmistat — Claude API çağrı sayısı + maliyet\n"
     "/yenidenegit — Modeli sıfırdan yeniden eğit\n"
     "/yardim — Bu listeyi göster"
 )
@@ -159,6 +160,9 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/yenidenegit":
             await _ml_yeniden_egit(event)
+
+        elif komut == "/llmistat":
+            await _llm_istatistik(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -533,6 +537,45 @@ async def _ml_yeniden_egit(event) -> None:
         await event.reply(f"✅ Model yeniden eğitildi: {sayi} örnek")
     except Exception as e:
         await event.reply(f"❌ Eğitim hatası: {e}")
+
+
+async def _llm_istatistik(event) -> None:
+    """Claude API çağrı sayısı + tahmini maliyet.
+
+    Otomatik öğretmen olarak kaç kez çağrıldığı, bu oturumdaki
+    yaklaşık maliyeti gösterir.
+    """
+    try:
+        from services import llm
+        ist = llm.oturum_istatistik()
+
+        # Maliyet tahmini: Haiku 4.5 → ~$0.001 per call (kısa promptlarda)
+        cagri = ist.get("oturum_cagri", 0)
+        tahmini_maliyet = cagri * 0.001
+
+        # ML eğitim verisi içinde 'llm' kaynağıyla eklenenler
+        from utils import ml_kategori
+        ml_ist = ml_kategori.istatistik()
+        kaynak_dagilim = ml_ist.get("kaynak_dagilim", {})
+        llm_egitim = kaynak_dagilim.get("llm", 0)
+        auto_egitim = kaynak_dagilim.get("auto", 0)
+        manuel_egitim = kaynak_dagilim.get("manuel", 0)
+
+        msg = (
+            "🤖 <b>Claude API Otomatik Öğretmen</b>\n\n"
+            f"<b>Durum:</b> {'🟢 Aktif' if ist['aktif'] else '🔴 Devre dışı'}\n"
+            f"<b>Oturum çağrısı:</b> {cagri} / {ist['limit']}\n"
+            f"<b>Tahmini maliyet:</b> ~${tahmini_maliyet:.3f}\n\n"
+            "<b>ML eğitim verisi kaynak dağılımı:</b>\n"
+            f"  • LLM öğretmen: <b>{llm_egitim}</b> örnek\n"
+            f"  • Otomatik (yüksek güven): <b>{auto_egitim}</b> örnek\n"
+            f"  • Manuel (/egit): <b>{manuel_egitim}</b> örnek\n\n"
+            "<i>LLM aktifse, ML belirsiz kaldığında otomatik soru sorulur "
+            "ve cevap modelin eğitim verisine eklenir. Sen hiç müdahale etmezsin.</i>"
+        )
+        await event.reply(msg, parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ İstatistik hatası: {e}")
 
 
 async def _hosgeldin_pinle(event) -> None:
