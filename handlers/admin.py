@@ -287,21 +287,31 @@ async def _ml_istatistik(event) -> None:
     try:
         from utils import ml_kategori
         ist = ml_kategori.istatistik()
+        kaynak = ist.get("kaynak_dagilim", {})
         satirlar = [
-            "🤖 <b>ML Kategori Modeli</b>",
+            f"🤖 <b>ML Kategori Modeli v{ist.get('version', '?')}</b>",
             "",
             f"📚 Toplam örnek: <b>{ist['toplam_ornek']}</b>",
             f"🧠 Vocabulary: <b>{ist['vocab_boyut']}</b> token",
-            f"📂 Kategori sayısı: <b>{ist['kategori_sayi']}</b>",
+            f"📂 Ana kategori: <b>{ist.get('ana_kategori_sayi', '?')}</b>"
+            + (f", alt-grup: <b>{ist.get('alt_grup_sayi', '?')}</b>" if 'alt_grup_sayi' in ist else ""),
+            f"📊 Toplam kategori: <b>{ist['kategori_sayi']}</b>",
             "",
-            "<b>Kategori başına örnek:</b>",
+            "<b>Eğitim verisi kaynağı:</b>",
+            f"  • Varsayılan: <b>{kaynak.get('varsayilan', 0)}</b>",
+            f"  • Manuel (/egit): <b>{kaynak.get('manuel', 0)}</b>",
+            f"  • Otomatik (yüksek güven): <b>{kaynak.get('auto', 0)}</b>",
+            f"  • LLM öğretmen: <b>{kaynak.get('llm', 0)}</b>",
         ]
-        for kat, sayi in sorted(ist["kategori_sayilari"].items(), key=lambda x: -x[1]):
-            satirlar.append(f"  {kat:12} {sayi}")
+        if ist.get("belirsiz_bekleyen"):
+            satirlar.append(f"\n⚠️ Belirsiz tahmin bekleyen: <b>{ist['belirsiz_bekleyen']}</b>")
+            satirlar.append("   <i>/aktiog ile görüntüle</i>")
         satirlar.append("")
-        satirlar.append("<i>Komutlar:</i>")
-        satirlar.append("  /egit &lt;kategori&gt; &lt;metin&gt;")
-        satirlar.append("  /tahmin &lt;metin&gt;")
+        satirlar.append("<b>En çok örnekli 10 kategori:</b>")
+        for kat, sayi in sorted(ist["kategori_sayilari"].items(), key=lambda x: -x[1])[:10]:
+            satirlar.append(f"  {kat:25} {sayi}")
+        satirlar.append("")
+        satirlar.append("<i>Komutlar: /tahmin, /egit, /kfold, /altkat, /llmistat</i>")
         await event.reply("\n".join(satirlar), parse_mode="html")
     except Exception as e:
         await event.reply(f"❌ ML modülü hatası: {e}")

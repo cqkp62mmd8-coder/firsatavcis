@@ -62,11 +62,16 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
             log("FILTRE", f"  Mevcut buton linkleri ({len(btn_links)}): {btn_links}")
         return None
 
-    # ── Somut TL fiyatı zorunlu — fiyatsız mesaj sızıntısını engelle ──
+    # ── Fiyat VEYA indirim sinyali zorunlu ──
+    # Meşru iki senaryo:
+    #   (a) Somut TL fiyatı var (örn. "iPhone 89.999 TL")
+    #   (b) Marka/mağaza kampanyası → fiyat yok ama yüzde var
+    #       (örn. "Adidas tüm ayakkabıda %60 indirim")
+    # İkisi de yoksa fiyatsız çöp → atla.
     from services.analiz import fiyat_bul
     _eski_fiyat, _yeni_fiyat, _, _ = fiyat_bul(blok)
-    if not _yeni_fiyat:
-        log("FILTRE", f"Fiyat bulunamadı → atlandı: '{onizleme}…'")
+    if not _yeni_fiyat and indirim < config.MIN_INDIRIM:
+        log("FILTRE", f"Fiyat ve indirim yok → atlandı: '{onizleme}…'")
         return None
 
     from services.analiz import urun_adi_bul
