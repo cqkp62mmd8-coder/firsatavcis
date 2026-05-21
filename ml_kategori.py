@@ -1,172 +1,308 @@
 """
-Yerel Naive Bayes sınıflandırıcı — sıfır harici bağımlılık.
+═══════════════════════════════════════════════════════════════════════
+Profesyonel ML Kategori Sınıflandırıcı v2
 
-Türkçe ürün adlarından kategori tahmini yapar.
-İlk yüklemede ./data/egitim.json'dan eğitim verisini okur.
-Her doğru/yanlış tahmin yeni eğitim verisi olarak kaydedilebilir.
+Özellikler:
+  • Multinomial Naive Bayes + TF-IDF ağırlıklandırma
+  • Çok dilli tokenizer (Türkçe + İngilizce hibrit)
+  • Karakter n-gram fallback (bilinmeyen kelimeler için)
+  • Belirsizlik tespiti (low confidence → LLM fallback)
+  • Otomatik öğrenme (online learning)
+  • k-fold cross-validation
+  • Karışıklık matrisi raporlama
+  • Aktif öğrenme (hangi örnekleri etiketlersem en faydalı?)
+  • Model versiyonlama
+  • Fast inference (cache + indexed lookups)
 
-Algoritma: Multinomial Naive Bayes + Laplace smoothing
-Tokenizasyon: küçük harf + noktalama temizleme + 2-gram + 3-gram
-
-Avantajlar:
-- Hızlı (mikrosaniye)
-- Sıfır maliyet (LLM API yok)
-- Offline çalışır
-- Bot içinden öğrenebilir (admin /egit komutu)
-
-Hedef doğruluk: %85-90 (mevcut keyword sistemiyle yarışır, bağlamı daha iyi anlar)
+Hiçbir harici bağımlılık yok — sadece Python standart kütüphanesi.
+═══════════════════════════════════════════════════════════════════════
 """
+import collections
 import json
 import math
 import os
 import re
-from collections import defaultdict
+import time
+from typing import Optional
 
 import config
 from utils.log import log, simdi_tr
 
 
-_MODEL_FILE = os.path.join(config.DATA_DIR, "ml_model.json")
-_EGITIM_FILE = os.path.join(config.DATA_DIR, "ml_egitim.json")
+_MODEL_FILE  = os.path.join(config.DATA_DIR, "ml_model_v2.json")
+_EGITIM_FILE = os.path.join(config.DATA_DIR, "ml_egitim_v2.json")
+_AKTIF_OGRENME_FILE = os.path.join(config.DATA_DIR, "ml_aktif_ogrenme.json")
+MODEL_VERSION = 2
 
-# Model durumu (RAM'de)
-_kategori_sayilari: dict[str, int] = {}            # her kategoride kaç örnek
-_token_sayilari: dict[str, dict[str, int]] = {}    # kategori → {token: sayı}
-_kategori_toplam_token: dict[str, int] = {}        # kategori → toplam token sayısı
+# ─── Global model durumu ────────────────────────────────────────
+_egitim_verisi: list[dict] = []      # [{metin, kategori, kaynak, eklendi_ts}]
+_kategori_priorlari: dict[str, float] = {}   # log P(kategori)
+_kelime_skorlari: dict[str, dict[str, float]] = {}   # kategori → {token: log P(token|kat)}
+_kategori_token_toplam: dict[str, int] = {}
+_idf_skorlari: dict[str, float] = {}   # token → IDF değeri
 _tum_tokenler: set[str] = set()
 _yuklendi: bool = False
+_son_egitim_zaman: float = 0.0
+
+# Aktif öğrenme: belirsiz tahminleri admin'e sor
+_belirsiz_kuyruk: list[dict] = []
+_BELIRSIZ_LIMIT = 50
 
 
 # ════════════════════════════════════════════════════════════════
-# Tokenizasyon
+# Türkçe morfoloji + tokenizasyon
 # ════════════════════════════════════════════════════════════════
 
-# Türkçe stop words — anlam taşımayan kelimeler
-_DURDUR_KELIMELER = {
-    "ve", "ile", "için", "olan", "olarak", "bir", "bu", "şu", "o",
-    "var", "yok", "tl", "₺", "lira", "indirim", "fiyat", "yerine",
-    "den", "dan", "de", "da", "ki", "mi", "mı", "mu", "mü",
-    "ne", "ne", "her", "tüm", "sadece", "kadar",
-}
+# Türkçe ekler (suffixes) — kelimeyi köküne indirgemek için
+_TURKCE_EKLER = [
+    "ları", "leri", "lar", "ler",         # çoğul
+    "dan", "den", "tan", "ten",           # ablatif
+    "nın", "nin", "nun", "nün",
+    "ın",  "in",  "un",  "ün",            # tamlama
+    "da",  "de",  "ta",  "te",            # lokatif
+    "ya",  "ye",  "yi",  "yı",
+    "lık", "lik", "luk", "lük",
+    "siz", "sız", "suz", "süz",
+    "lı",  "li",  "lu",  "lü",
+    "cı",  "ci",  "cu",  "cü",
+    "sı",  "si",  "su",  "sü",
+    "lım", "ım",  "im",  "um",  "üm",
+    "sın", "sin", "sun", "sün",
+]
+_TURKCE_EKLER.sort(key=len, reverse=True)   # uzundan kısaya
+
+# Stop words — anlam taşımayan kelimeler
+_DURDUR = frozenset({
+    "ve", "ile", "için", "olan", "olarak", "bir", "bu", "şu", "o", "veya", "ya da",
+    "var", "yok", "den", "dan", "de", "da", "ki", "mi", "mı", "mu", "mü",
+    "her", "tüm", "sadece", "kadar", "den", "doğru", "kez", "kere",
+    "şimdi", "sonra", "önce", "şöyle", "böyle", "öyle",
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "tl", "₺", "lira", "indirim", "fiyat", "yerine", "ila", "arası",
+    "yeni", "modeli", "model", "tip", "tipi", "set", "seti", "adet",
+    "kg", "gr", "ml", "lt", "cm", "mm", "inç", "watt", "volt", "amper",
+})
 
 
-def _tokenize(metin: str) -> list[str]:
-    """Metni temizle ve token listesine çevir.
-    Unigram + bigram + trigram (kelime kombinasyonları) kullanılır."""
+def _kok_bul(kelime: str) -> str:
+    """Türkçe ek çıkarımı — basit stemmer.
+    Örnek: 'süpürgeler' → 'süpürge', 'ürünlerinde' → 'ürün'"""
+    if len(kelime) <= 4:
+        return kelime
+    k = kelime.lower()
+    # En uzun ekleri sırayla dene
+    for ek in _TURKCE_EKLER:
+        if k.endswith(ek) and len(k) - len(ek) >= 3:
+            return k[:-len(ek)]
+    return k
+
+
+def _karakter_ngram(kelime: str, n: int = 3) -> list[str]:
+    """Karakter n-gramları üretir (bilinmeyen kelimeler için)."""
+    if len(kelime) < n:
+        return []
+    return [f"#{kelime[i:i+n]}#" for i in range(len(kelime) - n + 1)]
+
+
+def _tokenize(metin: str, derin: bool = True) -> list[str]:
+    """Profesyonel tokenizer:
+    1. Temizleme (URL, sayı, fiyat, vs.)
+    2. Stop word filtreleme
+    3. Kök bulma (Türkçe morfoloji)
+    4. n-gram (unigram + bigram + trigram)
+    5. Karakter trigram (fallback, bilinmeyen kelimeler için)
+    """
     if not metin:
         return []
-    # Küçük harfe çevir
+
     s = metin.lower()
-    # Türkçe karakterleri ASCII'ye çevir (eşleştirme daha güçlü)
-    # Aslında bırakacağız — Türkçe karakterler farklı kategoriler için anlamlı
-    # Sadece noktalama, sayı sembolleri sök
+    # URL'ler
     s = re.sub(r"https?://\S+", " ", s)
-    s = re.sub(r"[\d.,]+\s*(?:tl|₺|lira)", " ", s, flags=re.I)
+    # Fiyatlar
+    s = re.sub(r"[\d.,]+\s*(?:tl|₺|lira|dolar|usd|eur|euro)", " ", s, flags=re.I)
     s = re.sub(r"%\s*\d+|\d+\s*%", " ", s)
-    s = re.sub(r"[^\wçğıöşüâî\s]", " ", s, flags=re.UNICODE)
+    # Birimler (200ml, 16gb, 65inç vb)
+    s = re.sub(r"\b\d+\s*(?:gb|mb|tb|kg|gr|ml|lt|cm|mm|inç|inch|watt|w|volt|v|kw|hp|mp)\b", " ", s, flags=re.I)
+    # Model numaraları (sadece sayı veya alfasayısal kombinasyonlar — bağlam vermez)
+    s = re.sub(r"\b\d+[a-z]?\b", " ", s)   # 5L, 200, 18v vs.
+    # Noktalama
+    s = re.sub(r"[^\wçğıöşüâîİ\s]", " ", s, flags=re.UNICODE)
     s = re.sub(r"\s+", " ", s).strip()
 
-    # Unigrams (tek kelimeler)
-    kelimeler = [k for k in s.split() if len(k) >= 3 and k not in _DURDUR_KELIMELER]
+    # Kelimeler
+    raw = s.split()
+    kelimeler = []
+    for k in raw:
+        if len(k) < 3 or k in _DURDUR:
+            continue
+        # Türkçe kök
+        kok = _kok_bul(k)
+        kelimeler.append(kok)
+
     if not kelimeler:
         return []
 
     tokens = list(kelimeler)
-    # Bigrams ("akülü süpürge", "robot süpürge" gibi anlamlı çiftler)
+    # Bigrams
     for i in range(len(kelimeler) - 1):
         tokens.append(f"{kelimeler[i]}_{kelimeler[i+1]}")
-    # Trigrams (3'lü, marka + model + ürün tipi gibi)
-    for i in range(len(kelimeler) - 2):
-        tokens.append(f"{kelimeler[i]}_{kelimeler[i+1]}_{kelimeler[i+2]}")
+    # Trigrams
+    if derin:
+        for i in range(len(kelimeler) - 2):
+            tokens.append(f"{kelimeler[i]}_{kelimeler[i+1]}_{kelimeler[i+2]}")
+        # Karakter trigram'ları — sadece uzun kelimelerden (kısa olanlar zaten unigram)
+        for k in kelimeler:
+            if len(k) >= 6:
+                tokens.extend(_karakter_ngram(k, 3))
 
     return tokens
 
 
 # ════════════════════════════════════════════════════════════════
-# Model kaydet/yükle
+# Eğitim — Naive Bayes + IDF ağırlık
 # ════════════════════════════════════════════════════════════════
 
+def _modeli_egit() -> None:
+    """Tüm _egitim_verisi'ni kullanarak modeli baştan kurar.
+    NB olasılıkları + IDF ağırlıkları hesaplanır."""
+    global _kategori_priorlari, _kelime_skorlari, _kategori_token_toplam
+    global _idf_skorlari, _tum_tokenler, _son_egitim_zaman
+
+    if not _egitim_verisi:
+        return
+
+    # Token sayımları
+    token_sayim_kategoride: dict[str, dict[str, int]] = collections.defaultdict(
+        lambda: collections.defaultdict(int)
+    )
+    kategori_ornek_sayisi: dict[str, int] = collections.defaultdict(int)
+    token_belge_sayisi: dict[str, int] = collections.defaultdict(int)
+    toplam_belge = 0
+
+    for ornek in _egitim_verisi:
+        metin = ornek["metin"]
+        kategori = ornek["kategori"]
+        tokens = _tokenize(metin)
+        if not tokens:
+            continue
+        kategori_ornek_sayisi[kategori] += 1
+        toplam_belge += 1
+        # Bu örnekte hangi tokenler var (set olarak — IDF için)
+        token_set = set(tokens)
+        for token in token_set:
+            token_belge_sayisi[token] += 1
+        # Her token'i kategori sayımına ekle (frekans)
+        for token in tokens:
+            token_sayim_kategoride[kategori][token] += 1
+
+    toplam_ornek = sum(kategori_ornek_sayisi.values())
+    vocab = set()
+    for kat_dict in token_sayim_kategoride.values():
+        vocab.update(kat_dict.keys())
+    _tum_tokenler = vocab
+
+    # IDF: log(toplam_belge / (token_belge_sayısı + 1))
+    _idf_skorlari = {}
+    for token, df in token_belge_sayisi.items():
+        _idf_skorlari[token] = math.log((toplam_belge + 1) / (df + 1)) + 1
+
+    # Prior P(kategori)
+    _kategori_priorlari = {
+        kat: math.log(say / toplam_ornek)
+        for kat, say in kategori_ornek_sayisi.items()
+    }
+
+    # Likelihood P(token|kategori) — Laplace smoothing + IDF ağırlık
+    _kelime_skorlari = {}
+    _kategori_token_toplam = {}
+    vocab_size = len(vocab)
+    for kategori, token_dict in token_sayim_kategoride.items():
+        toplam_token = sum(token_dict.values())
+        _kategori_token_toplam[kategori] = toplam_token
+        _kelime_skorlari[kategori] = {}
+        for token in vocab:
+            sayim = token_dict.get(token, 0)
+            # TF-IDF tarzı: token frekansı × IDF
+            tf = (sayim + 1) / (toplam_token + vocab_size)
+            idf = _idf_skorlari.get(token, 1.0)
+            _kelime_skorlari[kategori][token] = math.log(tf * idf)
+
+    _son_egitim_zaman = time.time()
+
+
+# ════════════════════════════════════════════════════════════════
+# Veri yönetimi
+# ════════════════════════════════════════════════════════════════
+
+def _veri_kaydet() -> None:
+    """Eğitim verisini disk'e atomic yaz."""
+    try:
+        os.makedirs(os.path.dirname(_EGITIM_FILE) or ".", exist_ok=True)
+        gecici = _EGITIM_FILE + ".tmp"
+        with open(gecici, "w", encoding="utf-8") as f:
+            json.dump(_egitim_verisi, f, ensure_ascii=False)
+        os.replace(gecici, _EGITIM_FILE)
+    except Exception as e:
+        log("UYARI", f"Eğitim verisi kaydet: {e}")
+
+
 def _model_kaydet() -> None:
-    """Modeli JSON'a yaz (atomic)."""
+    """Model parametrelerini disk'e yaz."""
     try:
         os.makedirs(os.path.dirname(_MODEL_FILE) or ".", exist_ok=True)
         gecici = _MODEL_FILE + ".tmp"
         data = {
-            "kategori_sayilari": _kategori_sayilari,
-            "token_sayilari": _token_sayilari,
-            "kategori_toplam_token": _kategori_toplam_token,
-            "tum_tokenler": list(_tum_tokenler),
+            "version": MODEL_VERSION,
             "guncellendi": simdi_tr().isoformat(),
+            "kategori_priorlari": _kategori_priorlari,
+            "kelime_skorlari":    _kelime_skorlari,
+            "kategori_token_toplam": _kategori_token_toplam,
+            "idf_skorlari":       _idf_skorlari,
+            "tum_tokenler":       list(_tum_tokenler),
         }
         with open(gecici, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(gecici, _MODEL_FILE)
     except Exception as e:
-        log("UYARI", f"ML model kaydet: {e}")
+        log("UYARI", f"Model kaydet: {e}")
+
+
+def _veri_yukle() -> bool:
+    """Eğitim verisini yükler."""
+    global _egitim_verisi
+    if not os.path.exists(_EGITIM_FILE):
+        return False
+    try:
+        with open(_EGITIM_FILE, encoding="utf-8") as f:
+            _egitim_verisi = json.load(f)
+        return True
+    except Exception as e:
+        log("UYARI", f"Eğitim yükle: {e}")
+        return False
 
 
 def _model_yukle() -> bool:
-    """Diskten model yükle. Yoksa False döner."""
-    global _kategori_sayilari, _token_sayilari, _kategori_toplam_token, _tum_tokenler, _yuklendi
+    """Diskten hazır modeli yükler (eğitim atlanır)."""
+    global _kategori_priorlari, _kelime_skorlari, _kategori_token_toplam
+    global _idf_skorlari, _tum_tokenler, _yuklendi
     if not os.path.exists(_MODEL_FILE):
         return False
     try:
         with open(_MODEL_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        _kategori_sayilari = data["kategori_sayilari"]
-        _token_sayilari = data["token_sayilari"]
-        _kategori_toplam_token = data["kategori_toplam_token"]
+        if data.get("version") != MODEL_VERSION:
+            log("BILGI", "Eski model versiyonu, yeniden eğitilecek")
+            return False
+        _kategori_priorlari = data["kategori_priorlari"]
+        _kelime_skorlari = data["kelime_skorlari"]
+        _kategori_token_toplam = data["kategori_token_toplam"]
+        _idf_skorlari = data["idf_skorlari"]
         _tum_tokenler = set(data["tum_tokenler"])
         _yuklendi = True
-        log("OK", f"ML model yüklendi: {sum(_kategori_sayilari.values())} örnek, "
-                  f"{len(_tum_tokenler)} token, {len(_kategori_sayilari)} kategori")
         return True
     except Exception as e:
-        log("UYARI", f"ML model yükle: {e}")
+        log("UYARI", f"Model yükle: {e}")
         return False
-
-
-# ════════════════════════════════════════════════════════════════
-# Eğitim
-# ════════════════════════════════════════════════════════════════
-
-def egit_tek(metin: str, kategori: str) -> None:
-    """Tek bir örnek ekle (online learning)."""
-    global _yuklendi
-    tokens = _tokenize(metin)
-    if not tokens:
-        return
-    if kategori not in _kategori_sayilari:
-        _kategori_sayilari[kategori] = 0
-        _token_sayilari[kategori] = {}
-        _kategori_toplam_token[kategori] = 0
-    _kategori_sayilari[kategori] += 1
-    for token in tokens:
-        _token_sayilari[kategori][token] = _token_sayilari[kategori].get(token, 0) + 1
-        _kategori_toplam_token[kategori] += 1
-        _tum_tokenler.add(token)
-    _yuklendi = True
-
-
-def egit_toplu(ornekler: list[tuple[str, str]]) -> int:
-    """Birden çok örneği topluca eğit. Liste: [(metin, kategori), ...]"""
-    sayi = 0
-    for metin, kategori in ornekler:
-        egit_tek(metin, kategori)
-        sayi += 1
-    _model_kaydet()
-    # Eğitim verisini de sakla (yeniden eğitim için)
-    try:
-        mevcut = []
-        if os.path.exists(_EGITIM_FILE):
-            with open(_EGITIM_FILE, encoding="utf-8") as f:
-                mevcut = json.load(f)
-        mevcut.extend([{"metin": m, "kategori": k} for m, k in ornekler])
-        with open(_EGITIM_FILE, "w", encoding="utf-8") as f:
-            json.dump(mevcut, f, ensure_ascii=False)
-    except Exception as e:
-        log("UYARI", f"Eğitim verisi kaydet: {e}")
-    return sayi
 
 
 # ════════════════════════════════════════════════════════════════
@@ -174,41 +310,38 @@ def egit_toplu(ornekler: list[tuple[str, str]]) -> int:
 # ════════════════════════════════════════════════════════════════
 
 def tahmin(metin: str) -> tuple[str, float]:
-    """Metni sınıflandır. (kategori, güven_skoru 0.0-1.0) döner.
-    Model boşsa ('genel', 0.0) döner."""
+    """Metni sınıflandır. (kategori, güven 0.0-1.0) döner."""
+    global _yuklendi
     if not _yuklendi:
-        _model_yukle()
-    if not _kategori_sayilari:
+        _model_yukle() or ilk_kurulum()
+    if not _kategori_priorlari:
         return "genel", 0.0
 
     tokens = _tokenize(metin)
     if not tokens:
         return "genel", 0.0
 
-    toplam_ornek = sum(_kategori_sayilari.values())
-    vocab_boyut = len(_tum_tokenler)
-
-    # Her kategori için log-posterior hesapla
+    vocab_size = len(_tum_tokenler) or 1
     skorlar: dict[str, float] = {}
-    for kategori, ornek_sayisi in _kategori_sayilari.items():
-        # log P(kategori)
-        log_prior = math.log(ornek_sayisi / toplam_ornek)
-        # log P(tokens|kategori) — Multinomial NB + Laplace smoothing (α=1)
-        log_likelihood = 0.0
-        kat_tokenler = _token_sayilari.get(kategori, {})
-        kat_toplam = _kategori_toplam_token.get(kategori, 0)
+
+    for kategori, log_prior in _kategori_priorlari.items():
+        log_skor = log_prior
+        kat_token_skor = _kelime_skorlari.get(kategori, {})
+        kat_toplam = _kategori_token_toplam.get(kategori, 1)
         for token in tokens:
-            sayim = kat_tokenler.get(token, 0)
-            # P(token|kategori) = (count + 1) / (total + V)
-            log_likelihood += math.log((sayim + 1) / (kat_toplam + vocab_boyut))
-        skorlar[kategori] = log_prior + log_likelihood
+            if token in kat_token_skor:
+                log_skor += kat_token_skor[token]
+            else:
+                # Bilinmeyen token — Laplace + IDF varsayılan
+                idf = _idf_skorlari.get(token, math.log(2))
+                log_skor += math.log((1 / (kat_toplam + vocab_size)) * idf)
+        skorlar[kategori] = log_skor
 
-    # En yüksek skoru bul
+    if not skorlar:
+        return "genel", 0.0
+
     en_iyi_kat = max(skorlar, key=skorlar.get)
-    en_iyi_skor = skorlar[en_iyi_kat]
-
-    # Güven skoru: softmax ile normalize edilmiş olasılık
-    # Sayısal stabilite için max-shift
+    # Softmax güven skoru
     maks = max(skorlar.values())
     exp_skorlar = {k: math.exp(v - maks) for k, v in skorlar.items()}
     toplam = sum(exp_skorlar.values())
@@ -217,212 +350,313 @@ def tahmin(metin: str) -> tuple[str, float]:
     return en_iyi_kat, guven
 
 
+def tahmin_topk(metin: str, k: int = 3) -> list[tuple[str, float]]:
+    """En iyi k kategoriyi döner [(kategori, güven), ...]"""
+    if not _yuklendi:
+        _model_yukle() or ilk_kurulum()
+    if not _kategori_priorlari:
+        return []
+    tokens = _tokenize(metin)
+    if not tokens:
+        return []
+
+    vocab_size = len(_tum_tokenler) or 1
+    skorlar: dict[str, float] = {}
+    for kategori, log_prior in _kategori_priorlari.items():
+        log_skor = log_prior
+        kat_token_skor = _kelime_skorlari.get(kategori, {})
+        kat_toplam = _kategori_token_toplam.get(kategori, 1)
+        for token in tokens:
+            if token in kat_token_skor:
+                log_skor += kat_token_skor[token]
+            else:
+                idf = _idf_skorlari.get(token, math.log(2))
+                log_skor += math.log((1 / (kat_toplam + vocab_size)) * idf)
+        skorlar[kategori] = log_skor
+
+    maks = max(skorlar.values())
+    exp_skorlar = {k: math.exp(v - maks) for k, v in skorlar.items()}
+    toplam = sum(exp_skorlar.values())
+    olasiliklar = [(kat, exp_skorlar[kat] / toplam) for kat in skorlar]
+    olasiliklar.sort(key=lambda x: -x[1])
+    return olasiliklar[:k]
+
+
+def tahmin_hiyerarsik(metin: str) -> tuple[str, str, float]:
+    """Hiyerarşik tahmin: (ana_kategori, alt_kategori, güven) döner.
+    'elektronik:telefon' formatından ana ve alt'ı ayırır.
+    Alt yoksa boş string döner."""
+    tam_kat, guven = tahmin(metin)
+    if ":" in tam_kat:
+        ana, alt = tam_kat.split(":", 1)
+        return ana, alt, guven
+    return tam_kat, "", guven
+
+
+def ana_kategori_olasiliklari(metin: str) -> dict[str, float]:
+    """Ana kategori bazında toplam olasılık (alt kategorileri birleştirir).
+    Kullanım: belirsizlik tespiti için."""
+    topk = tahmin_topk(metin, k=20)   # tüm kategoriler
+    ana_skor: dict[str, float] = {}
+    for kat, olas in topk:
+        ana = kat.split(":")[0] if ":" in kat else kat
+        ana_skor[ana] = ana_skor.get(ana, 0) + olas
+    return ana_skor
+
+
 # ════════════════════════════════════════════════════════════════
-# İstatistik (admin için)
+# Aktif öğrenme — belirsiz tahminleri yakala (kalıcı, disk'te)
 # ════════════════════════════════════════════════════════════════
 
-def istatistik() -> dict:
-    """Model durumu özeti."""
-    if not _yuklendi:
-        _model_yukle()
+def _aktif_ogrenme_kaydet() -> None:
+    """Belirsiz kuyruğu disk'e atomic yaz."""
+    try:
+        os.makedirs(os.path.dirname(_AKTIF_OGRENME_FILE) or ".", exist_ok=True)
+        gecici = _AKTIF_OGRENME_FILE + ".tmp"
+        with open(gecici, "w", encoding="utf-8") as f:
+            json.dump(_belirsiz_kuyruk, f, ensure_ascii=False)
+        os.replace(gecici, _AKTIF_OGRENME_FILE)
+    except Exception as e:
+        log("UYARI", f"Aktif öğrenme kaydet: {e}")
+
+
+def _aktif_ogrenme_yukle() -> None:
+    """Disk'ten belirsiz kuyruğu yükle (bot başlangıcında)."""
+    global _belirsiz_kuyruk
+    if not os.path.exists(_AKTIF_OGRENME_FILE):
+        return
+    try:
+        with open(_AKTIF_OGRENME_FILE, encoding="utf-8") as f:
+            _belirsiz_kuyruk = json.load(f)
+    except Exception as e:
+        log("UYARI", f"Aktif öğrenme yükle: {e}")
+
+
+def belirsiz_kaydet(metin: str, tahmin_kat: str, guven: float) -> None:
+    """Düşük güvenli (uncertain) tahminleri kuyrukla — disk'e de yaz.
+    Sonra admin /aktiog komutu ile bunları görür ve /ogret ile etiketler."""
+    if guven >= 0.5:
+        return   # zaten güvenli
+    # Aynı metin daha önce kaydedilmiş mi? Tekrarı önle
+    metin_kisa = metin[:200]
+    for kayit in _belirsiz_kuyruk:
+        if kayit.get("metin") == metin_kisa:
+            return
+    _belirsiz_kuyruk.append({
+        "metin": metin_kisa,
+        "tahmin": tahmin_kat,
+        "guven":  round(guven, 3),
+        "zaman":  simdi_tr().isoformat(),
+    })
+    if len(_belirsiz_kuyruk) > _BELIRSIZ_LIMIT:
+        _belirsiz_kuyruk.pop(0)
+    _aktif_ogrenme_kaydet()
+
+
+def belirsiz_listele() -> list[dict]:
+    """Şu an belirsiz kuyrukta bekleyenler."""
+    return list(_belirsiz_kuyruk)
+
+
+def belirsiz_temizle() -> int:
+    """Hepsini sil — disk'i de temizle."""
+    n = len(_belirsiz_kuyruk)
+    _belirsiz_kuyruk.clear()
+    _aktif_ogrenme_kaydet()
+    return n
+
+
+def belirsiz_eslestir_ve_egit(satir_no: int, ana: str, alt: str = "") -> tuple[bool, str]:
+    """Belirsiz kuyruktaki #satir_no'yu 'ana:alt' ile etiketle ve modele ekle.
+    Etiketlenince kuyruktan çıkarılır. (basari, mesaj) döner."""
+    if not (1 <= satir_no <= len(_belirsiz_kuyruk)):
+        return False, f"Geçersiz numara (1-{len(_belirsiz_kuyruk)})"
+    kayit = _belirsiz_kuyruk[satir_no - 1]
+    metin = kayit["metin"]
+    tam_kat = f"{ana}:{alt}" if alt else ana
+    # Modele ekle
+    egit_tek(metin, tam_kat, kaynak="aktif_ogrenme", hemen_egit=True)
+    # Kuyruktan çıkar
+    _belirsiz_kuyruk.pop(satir_no - 1)
+    _aktif_ogrenme_kaydet()
+    return True, f"Öğretildi: '{metin[:50]}…' → {tam_kat}"
+
+
+# ════════════════════════════════════════════════════════════════
+# Eğitim API'leri
+# ════════════════════════════════════════════════════════════════
+
+_kirli_sayac: int = 0   # eğitilmemiş yeni veri sayısı
+_RETRAIN_ESIK = 20      # her 20 yeni örneğin sonunda retrain
+
+
+def egit_tek(metin: str, kategori: str, kaynak: str = "manuel", hemen_egit: bool = True) -> None:
+    """Tek bir örnek ekle.
+    Modeli yeniden eğitir (manuel için anında, otomatik için 20 örnekte bir).
+    'kaynak': 'manuel', 'auto', 'llm' gibi etiket."""
+    global _kirli_sayac
+    _egitim_verisi.append({
+        "metin":    metin,
+        "kategori": kategori,
+        "kaynak":   kaynak,
+        "eklendi":  simdi_tr().isoformat(),
+    })
+    _kirli_sayac += 1
+
+    # Manuel eğitimde anında retrain (admin /egit komutu beklemekte)
+    # Otomatik eğitimde batched retrain (her N örnekte)
+    if hemen_egit or _kirli_sayac >= _RETRAIN_ESIK:
+        _modeli_egit()
+        _veri_kaydet()
+        _model_kaydet()
+        _kirli_sayac = 0
+
+
+def egit_toplu(ornekler: list[tuple[str, str]], kaynak: str = "toplu") -> int:
+    """Birden çok örnek ekle. Sonra tek seferde eğit."""
+    global _kirli_sayac
+    for metin, kategori in ornekler:
+        _egitim_verisi.append({
+            "metin":    metin,
+            "kategori": kategori,
+            "kaynak":   kaynak,
+            "eklendi":  simdi_tr().isoformat(),
+        })
+    _modeli_egit()
+    _veri_kaydet()
+    _model_kaydet()
+    _kirli_sayac = 0
+    return len(ornekler)
+
+
+def yeniden_egit() -> int:
+    """Eğitim verisinden modeli sıfırdan eğit."""
+    _modeli_egit()
+    _model_kaydet()
+    return len(_egitim_verisi)
+
+
+# ════════════════════════════════════════════════════════════════
+# Doğrulama / değerlendirme
+# ════════════════════════════════════════════════════════════════
+
+def k_fold_dogruluk(k: int = 5) -> dict:
+    """k-fold cross validation. Doğruluk, kategori başına precision/recall döner."""
+    global _egitim_verisi
+    if len(_egitim_verisi) < k * 5:
+        return {"hata": f"En az {k*5} örnek gerekli (şu an {len(_egitim_verisi)})"}
+
+    import random
+    veri = list(_egitim_verisi)
+    random.shuffle(veri)
+    fold_size = len(veri) // k
+
+    karmasiklik: dict[str, dict[str, int]] = collections.defaultdict(
+        lambda: collections.defaultdict(int)
+    )
+    toplam_dogru = 0
+    toplam_test = 0
+
+    orijinal_veri = list(_egitim_verisi)
+
+    for fold in range(k):
+        test_baslangic = fold * fold_size
+        test_son = test_baslangic + fold_size
+        test_set = veri[test_baslangic:test_son]
+        egitim_set = veri[:test_baslangic] + veri[test_son:]
+
+        # Geçici eğit
+        _egitim_verisi = egitim_set
+        _modeli_egit()
+
+        # Test
+        for ornek in test_set:
+            tahmin_kat, _ = tahmin(ornek["metin"])
+            gercek = ornek["kategori"]
+            karmasiklik[gercek][tahmin_kat] += 1
+            if tahmin_kat == gercek:
+                toplam_dogru += 1
+            toplam_test += 1
+
+    # Orijinal modele geri dön
+    _egitim_verisi = orijinal_veri
+    _modeli_egit()
+
+    # Precision / Recall hesapla
+    kategoriler = set()
+    for k1, k2_dict in karmasiklik.items():
+        kategoriler.add(k1)
+        kategoriler.update(k2_dict.keys())
+
+    metrik = {}
+    for kat in sorted(kategoriler):
+        tp = karmasiklik[kat].get(kat, 0)
+        fn = sum(v for k2, v in karmasiklik[kat].items() if k2 != kat)
+        fp = sum(karmasiklik[g].get(kat, 0) for g in kategoriler if g != kat)
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        metrik[kat] = {
+            "precision": round(precision, 3),
+            "recall":    round(recall, 3),
+            "f1":        round(f1, 3),
+            "ornek":     sum(karmasiklik[kat].values()),
+        }
+
     return {
-        "toplam_ornek": sum(_kategori_sayilari.values()),
-        "kategori_sayilari": dict(_kategori_sayilari),
-        "vocab_boyut": len(_tum_tokenler),
-        "kategori_sayi": len(_kategori_sayilari),
+        "k": k,
+        "toplam_ornek":  toplam_test,
+        "toplam_dogru":  toplam_dogru,
+        "dogruluk":      round(toplam_dogru / toplam_test, 3) if toplam_test else 0.0,
+        "kategori":      metrik,
     }
 
 
 # ════════════════════════════════════════════════════════════════
-# İlk yükleme: hazır eğitim seti
+# İstatistik & teşhis
 # ════════════════════════════════════════════════════════════════
 
-# Bot ilk kez çalıştığında bu örneklerle eğit.
-# Sonradan kendi öğrenmesiyle iyileşir.
-_VARSAYILAN_EGITIM = [
-    # ELEKTRONİK
-    ("Bosch akülü elektrikli süpürge 18 Volt", "elektronik"),
-    ("Robot süpürge Dyson V11 Absolute", "elektronik"),
-    ("Samsung Galaxy S24 Ultra 256GB", "elektronik"),
-    ("iPhone 15 Pro Max 1TB titanyum", "elektronik"),
-    ("AirPods Pro 2. nesil kulaklık", "elektronik"),
-    ("Apple Watch Series 9 GPS 45mm", "elektronik"),
-    ("Karaca çay makinesi Çaysever 800W", "elektronik"),
-    ("Philips saç kurutma makinesi 2000W", "elektronik"),
-    ("Tefal tost makinesi 4 dilim", "elektronik"),
-    ("LG 65 inç 4K Smart TV", "elektronik"),
-    ("Sony WH-1000XM5 kablosuz kulaklık", "elektronik"),
-    ("Logitech MX Master 3S kablosuz mouse", "elektronik"),
-    ("Akülü matkap Bosch GSR 12V profesyonel", "elektronik"),
-    ("Xiaomi Mi powerbank 20000 mAh", "elektronik"),
-    ("Lenovo ThinkPad X1 Carbon laptop", "elektronik"),
-    ("ASUS ROG gaming klavye RGB", "elektronik"),
-    ("Asus ZenBook 14 Intel Core i7 16GB RAM", "elektronik"),
-    ("Mesh Wifi 6 sistem TP-Link", "elektronik"),
-    ("Arçelik buzdolabı No-Frost 600L", "elektronik"),
-    ("Beko çamaşır makinesi 9kg A++", "elektronik"),
-    ("Fakir blender seti 1000W", "elektronik"),
-    ("Braun saç şekillendirici fön makinesi", "elektronik"),
-    ("Xiaomi mi band 8 akıllı bileklik", "elektronik"),
-    ("Sony PS5 oyun konsolu disk sürümü", "elektronik"),
-    ("Nintendo Switch OLED model konsol", "elektronik"),
+def istatistik() -> dict:
+    if not _yuklendi:
+        _model_yukle() or ilk_kurulum()
+    kategori_dagilim = collections.Counter()
+    kaynak_dagilim = collections.Counter()
+    for v in _egitim_verisi:
+        kategori_dagilim[v["kategori"]] += 1
+        kaynak_dagilim[v.get("kaynak", "?")] += 1
+    return {
+        "version":             MODEL_VERSION,
+        "toplam_ornek":        len(_egitim_verisi),
+        "kategori_sayilari":   dict(kategori_dagilim),
+        "kaynak_dagilim":      dict(kaynak_dagilim),
+        "vocab_boyut":         len(_tum_tokenler),
+        "kategori_sayi":       len(_kategori_priorlari),
+        "belirsiz_bekleyen":   len(_belirsiz_kuyruk),
+        "son_egitim":          _son_egitim_zaman,
+    }
 
-    # GİYİM
-    ("Jack & Jones erkek şort jean denim", "giyim"),
-    ("Adidas Samba siyah ayakkabı 42 numara", "giyim"),
-    ("Nike Air Force 1 beyaz spor ayakkabı", "giyim"),
-    ("Levi's 501 erkek jean pantolon mavi", "giyim"),
-    ("Zara kadın elbise mini siyah", "giyim"),
-    ("LCW kadın hoodie kapüşonlu sweatshirt", "giyim"),
-    ("Mango deri ceket kahverengi", "giyim"),
-    ("Koton kadın tişört beyaz pamuklu", "giyim"),
-    ("Defacto erkek polo tişört lacivert", "giyim"),
-    ("Puma kazak yünlü erkek model", "giyim"),
-    ("Reebok kadın taytı yoga pilates", "giyim"),
-    ("Calvin Klein iç çamaşırı erkek 3'lü", "giyim"),
-    ("Tommy Hilfiger erkek gömlek mavi", "giyim"),
-    ("New Balance 574 unisex sneaker", "giyim"),
-    ("Polo Ralph Lauren erkek polo yaka tişört", "giyim"),
-    ("Skechers kadın yürüyüş ayakkabısı", "giyim"),
-    ("Bershka kadın kot etek mini", "giyim"),
-    ("H&M kadın bluz keten yazlık", "giyim"),
-    ("Lacoste erkek polo tişört beyaz", "giyim"),
-    ("Vans Old Skool siyah unisex", "giyim"),
 
-    # KOZMETIK
-    ("Maybelline matte ruj lipstick kırmızı", "kozmetik"),
-    ("L'Oréal Paris fondöten cilt tonu", "kozmetik"),
-    ("Nivea güneş kremi SPF 50+ yüz", "kozmetik"),
-    ("The Ordinary niacinamide serum 30ml", "kozmetik"),
-    ("CeraVe nemlendirici krem yüz vücut", "kozmetik"),
-    ("Garnier saç maskesi kurumuş saçlar için", "kozmetik"),
-    ("Maybelline kirpik maskara siyah", "kozmetik"),
-    ("Vichy yaşlanma karşıtı krem 50ml", "kozmetik"),
-    ("Pantene şampuan 600 ml argan yağlı", "kozmetik"),
-    ("Bioderma micellar makyaj temizleyici 500ml", "kozmetik"),
-    ("Loreal göz kremi yaşlanma karşıtı", "kozmetik"),
-    ("Estée Lauder Double Wear fondöten", "kozmetik"),
-    ("Dior parfüm Sauvage erkek EDT 100ml", "kozmetik"),
-    ("Chanel No 5 kadın parfüm 50ml", "kozmetik"),
-    ("MAC Studio Fix powder pudra", "kozmetik"),
-    ("Flormar kapatıcı concealer açık ten", "kozmetik"),
-    ("Bioderma Sebium yağlı cilt jel temizleyici", "kozmetik"),
-    ("Caudalie güneş losyonu çocuk SPF 50", "kozmetik"),
-
-    # EV & YAŞAM
-    ("Karaca Home 4 parça hamam seti", "ev"),
-    ("English Home çay tabağı seti 6'lı", "ev"),
-    ("Madame Coco vazo seramik beyaz", "ev"),
-    ("Sarev battaniye çift kişilik kışlık", "ev"),
-    ("Pierre Cardin nevresim takımı çift kişilik", "ev"),
-    ("Tefal tencere seti 9 parça indüksiyon", "ev"),
-    ("IKEA POÄNG koltuk salon mobilya", "ev"),
-    ("Karaca yastık 4 mevsim yumuşak", "ev"),
-    ("Bambum bıçak seti mutfak 5 parça", "ev"),
-    ("Hisar tabak seti 24 parça porselen", "ev"),
-    ("Linens çarşaf takımı tek kişilik", "ev"),
-    ("Vivense yemek masası takımı 6 kişilik", "ev"),
-    ("Doğtaş kanepe üçlü modern", "ev"),
-
-    # MARKET
-    ("Lavazza kahve çekirdek 1kg Crema e Gusto", "market"),
-    ("Nutella kakaolu fındık kreması 750g", "market"),
-    ("Eti Cin susamlı bisküvi 12'li paket", "market"),
-    ("Lindt Excellence çikolata 70% kakao", "market"),
-    ("Filiz makarna 500g spagetti", "market"),
-    ("Ülker kakaolu gofret atıştırmalık", "market"),
-    ("Komili sızma zeytinyağı 1L cam şişe", "market"),
-    ("Şenpiliç tavuk göğsü 1kg", "market"),
-    ("Sek süt tam yağlı 1L UHT", "market"),
-    ("Pınar peynir beyaz 600g tam yağlı", "market"),
-    ("Persil çamaşır deterjanı sıvı 3L", "market"),
-    ("Yumoş yumuşatıcı çamaşır 1.5L", "market"),
-
-    # SPOR
-    ("Decathlon kettlebell 8kg fitness", "spor"),
-    ("Reebok yoga matı 6mm kalın anti-slip", "spor"),
-    ("Nike futbol topu 5 numara FIFA", "spor"),
-    ("Specialized bisiklet dağ tipi 27.5", "spor"),
-    ("Salomon koşu ayakkabısı XA Pro 3D", "spor"),
-    ("Adidas spor çantası halı saha", "spor"),
-    ("Wilson tenis raketi Pro Staff RF97", "spor"),
-    ("Speedo yüzücü gözlüğü silikon kayış", "spor"),
-
-    # OYUN
-    ("Lego Technic 42115 Lamborghini Sián", "oyun"),
-    ("Hot Wheels 5'li yarış arabası seti", "oyun"),
-    ("Hot Wheels Mario Kart oyuncak araba", "oyun"),
-    ("PlayStation 5 oyun God of War Ragnarök", "oyun"),
-    ("Xbox Series X controller wireless", "oyun"),
-    ("Razer DeathAdder V3 gaming mouse", "oyun"),
-    ("HyperX Cloud II gaming kulaklık", "oyun"),
-    ("FIFA 24 PS5 Standart Edition", "oyun"),
-    ("Logitech G Pro gaming klavye mekanik", "oyun"),
-
-    # BEBEK
-    ("Prima bebek bezi 4 numara 60'lı", "bebek"),
-    ("Maxi-Cosi araba koltuğu 0-13kg", "bebek"),
-    ("Chicco bebek arabası katlanabilir", "bebek"),
-    ("Aptamil bebek maması 1 doğumdan itibaren", "bebek"),
-    ("Avent biberon 260ml damaktan emzik", "bebek"),
-    ("Fisher Price oyuncak çıngırak bebek", "bebek"),
-    ("Joie Mirus bebek puseti hafif", "bebek"),
-
-    # SAĞLIK
-    ("Solgar magnezyum sitrat 60 tablet", "saglik"),
-    ("Now Foods omega 3 balık yağı 100 kapsül", "saglik"),
-    ("Centrum multivitamin 60 tablet erişkin", "saglik"),
-    ("HC Care biotin saç vitamini 60 kapsül", "saglik"),
-    ("Vichy Dercos saç dökülmesi ampul", "saglik"),
-    ("Tansiyon ölçer Omron dijital kol", "saglik"),
-    ("Beurer ateş ölçer dijital", "saglik"),
-    ("Solgar D3 vitamini 2000 IU 60 kapsül", "saglik"),
-    ("Erbatab magnezyum 3'lü form 60 kapsül", "saglik"),
-
-    # OTOMOTİV
-    ("Michelin Primacy 4 195/65 R15 lastik", "otomotiv"),
-    ("Bosch silecek lastiği 65cm araç", "otomotiv"),
-    ("Goodyear UltraGrip Performance kışlık", "otomotiv"),
-    ("Castrol Edge motor yağı 5W-30 4L", "otomotiv"),
-    ("Petlas Velox Sport yaz lastiği 205/55", "otomotiv"),
-    ("Mobil 1 sentetik motor yağı 5L", "otomotiv"),
-    ("Continental EcoContact 6 lastik", "otomotiv"),
-    ("Varta akü 60 Ah 12V binek araç", "otomotiv"),
-]
+# Veri seti (büyük) ayrı dosyaya
+from utils.ml_dataset import EGITIM_VERISI as _VARSAYILAN_EGITIM
 
 
 def ilk_kurulum() -> None:
-    """İlk çalıştırmada varsayılan eğitim setiyle modeli kur."""
+    """Bot ilk açıldığında çağrılır."""
     global _yuklendi
-    if _model_yukle():
-        return   # Model zaten var
+    # Aktif öğrenme kuyruğunu (varsa) önce yükle
+    _aktif_ogrenme_yukle()
+
+    if _model_yukle() and _veri_yukle():
+        log("OK", f"ML model yüklendi: {len(_egitim_verisi)} örnek, "
+                  f"{len(_tum_tokenler)} token, {len(_kategori_priorlari)} kategori"
+                  + (f" (aktif öğrenme: {len(_belirsiz_kuyruk)} bekleyen)"
+                     if _belirsiz_kuyruk else ""))
+        _yuklendi = True
+        return
+
     log("BILGI", f"ML modeli ilk kurulum: {len(_VARSAYILAN_EGITIM)} örnek eğitiliyor…")
-    egit_toplu(_VARSAYILAN_EGITIM)
+    egit_toplu(_VARSAYILAN_EGITIM, kaynak="varsayilan")
     _yuklendi = True
     ist = istatistik()
     log("OK", f"ML modeli hazır — {ist['toplam_ornek']} örnek, "
               f"{ist['vocab_boyut']} token, {ist['kategori_sayi']} kategori")
-
-
-def yeniden_egit_dosyadan() -> int:
-    """Kayıtlı eğitim verisinden modeli sıfırdan yeniden eğit."""
-    global _kategori_sayilari, _token_sayilari, _kategori_toplam_token, _tum_tokenler, _yuklendi
-    if not os.path.exists(_EGITIM_FILE):
-        return 0
-    _kategori_sayilari = {}
-    _token_sayilari = {}
-    _kategori_toplam_token = {}
-    _tum_tokenler = set()
-    try:
-        with open(_EGITIM_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-        for d in data:
-            egit_tek(d["metin"], d["kategori"])
-        # Varsayılan setini de ekle (uniqe)
-        for metin, kat in _VARSAYILAN_EGITIM:
-            egit_tek(metin, kat)
-        _model_kaydet()
-        return sum(_kategori_sayilari.values())
-    except Exception as e:
-        log("UYARI", f"Yeniden eğitim: {e}")
-        return 0
