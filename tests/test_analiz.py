@@ -173,14 +173,16 @@ class TestMesajBolum:
         bloklar = mesaj_bolum_ayir(m)
         assert len(bloklar) == 2
 
-    def test_max_iki_blok(self):
+    def test_coklu_blok_destegi(self):
+        """v17: Artık 5 ürüne kadar destek var (eskiden max 2 idi)."""
         from services.analiz import mesaj_bolum_ayir
         m = """🔥 A 200 TL yerine 100 TL
 
 🔥 B 400 TL yerine 200 TL
 
 🔥 C 600 TL yerine 300 TL"""
-        assert len(mesaj_bolum_ayir(m)) == 2
+        # 3 ürün → 3 blok döner (max 5 limiti)
+        assert len(mesaj_bolum_ayir(m)) == 3
 
     def test_kisa_mesaj_bolunmez(self):
         from services.analiz import mesaj_bolum_ayir
@@ -218,3 +220,89 @@ class TestKategori:
         from services.analiz import kategori_bul
         kat, _, _ = kategori_bul("Bilinmeyen şey")
         assert kat == "genel"
+
+
+# ════════════════════════════════════════════════════════════════
+# v17 yeni testleri — kullanıcı bildirilen hatalar
+# ════════════════════════════════════════════════════════════════
+
+class TestSatirIciCokluUrun:
+    """v17: 'Ürün X TL - Ürün Y TL' deseninde satır içi bölme."""
+
+    def test_satir_ici_iki_urun(self):
+        """Aynı satırda iki ürün+fiyat → iki blok dönsün."""
+        from services.analiz import _satir_ici_bol
+        s = "Frederic Patric Erkek 50ML Parfüm 285TL - Chakra String Saksılık Sepette 228TL"
+        parcalar = _satir_ici_bol(s)
+        assert len(parcalar) == 2
+        assert "285TL" in parcalar[0]
+        assert "228TL" in parcalar[1]
+
+    def test_satir_ici_tek_urun_bolunmez(self):
+        """Tek ürün+fiyat → ayrılmamalı."""
+        from services.analiz import _satir_ici_bol
+        s = "iPhone 15 Pro Max 89.999 TL"
+        assert _satir_ici_bol(s) == [s]
+
+    def test_satir_ici_tire_kargo_bolunmez(self):
+        """'X TL - Premium Ücretsiz Kargo' → sağda fiyat yok, bölünmemeli."""
+        from services.analiz import _satir_ici_bol
+        s = "Sepette 299TL - Premium Üyelik Ücretsiz Kargo"
+        assert _satir_ici_bol(s) == [s]
+
+    def test_kullanici_gercek_mesaji(self):
+        """Kullanıcının gerçek bildirdiği 3 ürünlü mesaj."""
+        from services.analiz import mesaj_bolum_ayir, fiyat_bul, urun_adi_bul
+        m = """🔥Flex Track Yarış Pisti Vantuzlu 4.5 Metre
+
+✅Sepette 299TL - Premium Üyelik Ücretsiz Kargo
+🔻Frederic Patric Erkek 50ML Parfüm 285TL - Chakra String Saksılık Sepette 228TL"""
+        bloklar = mesaj_bolum_ayir(m)
+        assert len(bloklar) == 3, f"3 ürün bekleniyor, {len(bloklar)} bulundu"
+
+        # Her blokta hem fiyat hem ürün adı olmalı
+        urunler = [urun_adi_bul(b) for b in bloklar]
+        fiyatlar = [fiyat_bul(b)[1] for b in bloklar]
+        assert all(u is not None for u in urunler), f"Ürün adı eksik: {urunler}"
+        assert all(f is not None for f in fiyatlar), f"Fiyat eksik: {fiyatlar}"
+        assert "299" in str(fiyatlar)
+        assert "285" in str(fiyatlar)
+        assert "228" in str(fiyatlar)
+
+
+class TestFiyatsizMesajRedditi:
+    """Fiyatsız ürün → reddedilsin."""
+
+    def test_fiyat_var_olmali(self):
+        """Mesajda fiyat hiç yoksa fiyat_bul None döner."""
+        from services.analiz import fiyat_bul
+        _, yeni, _, _ = fiyat_bul("Sadece açıklama, fiyat yok")
+        assert yeni is None
+
+    def test_sadece_yuzde_fiyat_degil(self):
+        """Sadece %50 var ama TL yok → fiyat olmamalı."""
+        from services.analiz import fiyat_bul
+        _, yeni, _, _ = fiyat_bul("Tüm ürünlerde %50 indirim")
+        assert yeni is None
+
+
+class TestSepetteKampanyaAyrimi:
+    """v17: 'Sepette 299TL' (fiyat) vs 'Sepette %20 indirim' (kampanya) ayrımı."""
+
+    def test_sepette_fiyat_urun_adi_cikar(self):
+        """'Ürün Adı Sepette 228TL' → ürün adı 'Ürün Adı' olmalı."""
+        from services.analiz import urun_adi_bul
+        urun = urun_adi_bul("Chakra String Saksılık Sepette 228TL")
+        assert urun is not None
+        assert "Chakra" in urun
+        assert "Saksılık" in urun
+        # "Sepette" temizlenmeli
+        assert "Sepette" not in urun
+
+    def test_sepette_kampanya_kalip_eslesir(self):
+        """'Sepette %20 indirim' → kampanya kalıbı olarak işaretlenir."""
+        from services.analiz import _KAMPANYA_KALIP
+        assert _KAMPANYA_KALIP.search("Sepette %20 indirim")
+        assert _KAMPANYA_KALIP.search("Sepette ek indirim")
+        # Ama "Sepette 299 TL" tetiklenmemeli
+        assert not _KAMPANYA_KALIP.search("Sepette 299 TL")
