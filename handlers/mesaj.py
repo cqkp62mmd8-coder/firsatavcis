@@ -95,10 +95,28 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
     magaza = magaza_bul(blok, lnk)
     kat, _, _ = kategori_bul(blok)
     fs = firsat_skoru(blok, indirim, btn_links)
+
+    # ── Otomatik öğrenme (v17) ──
+    # Ürün filtreyi geçti VE yüksek kaliteli (skor & indirim) ise
+    # ML'e yeni eğitim verisi olarak ekle.
+    # Sadece güvenli durumlarda — feedback loop'u önlemek için.
+    try:
+        if (urun and skor >= 50 and indirim >= 25
+                and kat != "genel" and len(urun) >= 10):
+            from utils import ml_kategori
+            from services.analiz import kategori_bul_tam
+            ana_k, alt_k, guven = kategori_bul_tam(blok)
+            # Sadece çok güvenli tahminler eklensin (loop'u önle)
+            if guven >= 0.6 and ana_k == kat and ana_k != "genel":
+                tam_kat = f"{ana_k}:{alt_k}" if alt_k else ana_k
+                ml_kategori.egit_tek(urun, tam_kat, kaynak="auto", hemen_egit=False)
+    except Exception:
+        pass
+
     return {
         "blok": blok, "indirim": indirim, "link": lnk,
         "magaza": magaza, "kat": kat, "skor": skor, "fs": fs,
-        "urun_llm": urun if not urun_adi_bul(blok) else None,   # LLM'den geldiyse sablon'a aktarılabilir
+        "urun_llm": urun if not urun_adi_bul(blok) else None,
     }
 
 

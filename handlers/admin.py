@@ -32,10 +32,15 @@ _YARDIM = (
     "/temizle — Görülmüş önbelleği sıfırla\n"
     "/durdur — Gönderimi duraklat\n"
     "/baslat — Gönderimi devam ettir\n"
-    "<b>ML Komutları:</b>\n"
+    "\n<b>ML Komutları:</b>\n"
     "/mlistatistik — ML model durumu\n"
-    "/egit &lt;kategori&gt; &lt;metin&gt; — Yeni eğitim örneği\n"
-    "/tahmin &lt;metin&gt; — Bir metin için kategori tahmin et\n"
+    "/egit &lt;ana:alt&gt; &lt;metin&gt; — Eğitim örneği ekle\n"
+    "/tahmin &lt;metin&gt; — Kategori tahmin et (top-3)\n"
+    "/altkat — Tüm kategori hiyerarşisini listele\n"
+    "/kfold — 5-fold cross validation (doğruluk testi)\n"
+    "/aktiog — Belirsiz tahminleri listele\n"
+    "/ogret &lt;sira&gt; &lt;ana:alt&gt; — Belirsizi etiketle\n"
+    "/yenidenegit — Modeli sıfırdan yeniden eğit\n"
     "/yardim — Bu listeyi göster"
 )
 
@@ -139,6 +144,21 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/tahmin":
             await _ml_tahmin(event, mesaj_metin)
+
+        elif komut == "/altkat":
+            await _ml_altkat_listele(event)
+
+        elif komut == "/kfold":
+            await _ml_kfold(event)
+
+        elif komut == "/aktiog":
+            await _ml_aktif_ogrenme_listele(event)
+
+        elif komut == "/ogret":
+            await _ml_ogret(event, mesaj_metin)
+
+        elif komut == "/yenidenegit":
+            await _ml_yeniden_egit(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -297,22 +317,37 @@ async def _ml_egit(event, mesaj_metin: str) -> None:
 
     parcalar = mesaj_metin.strip().split(maxsplit=1)
     if len(parcalar) < 2:
-        await event.reply("⚠️ Eksik parametre. <code>/egit elektronik metin</code>", parse_mode="html")
+        await event.reply("⚠️ Eksik parametre. <code>/egit elektronik:telefon Galaxy S24</code>", parse_mode="html")
         return
 
     kategori, metin = parcalar[0].lower(), parcalar[1]
-    if kategori not in config.KATEGORILER:
+
+    # Kategori formatını kontrol et: 'ana' veya 'ana:alt'
+    from utils.ml_kategoriler import KATEGORI_AGAC, ana_kategori_listesi
+    if ":" in kategori:
+        ana, alt = kategori.split(":", 1)
+    else:
+        ana, alt = kategori, None
+
+    if ana not in KATEGORI_AGAC:
         await event.reply(
-            f"⚠️ Geçersiz kategori: <code>{kategori}</code>\n"
-            f"Geçerli: {', '.join(config.KATEGORILER.keys())}",
+            f"⚠️ Geçersiz ana kategori: <code>{ana}</code>\n"
+            f"Geçerli: {', '.join(ana_kategori_listesi())}",
+            parse_mode="html",
+        )
+        return
+    if alt and alt not in KATEGORI_AGAC[ana].get("alt", {}):
+        from utils.ml_kategoriler import alt_kategori_listesi
+        await event.reply(
+            f"⚠️ Geçersiz alt kategori: <code>{alt}</code>\n"
+            f"<code>{ana}</code> altında: {', '.join(alt_kategori_listesi(ana)) or '(alt yok)'}",
             parse_mode="html",
         )
         return
 
     try:
         from utils import ml_kategori
-        ml_kategori.egit_toplu([(metin, kategori)])
-        # Tahmin et, doğrulukla göster
+        ml_kategori.egit_toplu([(metin, kategori)], kaynak="manuel")
         kat, guven = ml_kategori.tahmin(metin)
         await event.reply(
             f"✅ Eğitildi: <code>{kategori}</code>\n"
@@ -325,7 +360,7 @@ async def _ml_egit(event, mesaj_metin: str) -> None:
 
 
 async def _ml_tahmin(event, mesaj_metin: str) -> None:
-    """Bir metin için ML tahminini göster.
+    """Top-3 kategori tahmini ile detaylı analiz.
     Kullanım: /tahmin Bosch akülü süpürge"""
     if not mesaj_metin:
         await event.reply("Kullanım: <code>/tahmin &lt;ürün metni&gt;</code>", parse_mode="html")
@@ -333,20 +368,171 @@ async def _ml_tahmin(event, mesaj_metin: str) -> None:
 
     try:
         from utils import ml_kategori
-        kat, guven = ml_kategori.tahmin(mesaj_metin)
-        # Keyword karşılaştırması için kategori_bul'u da çalıştır
-        from services.analiz import kategori_bul
-        hibrit_kat, _, _ = kategori_bul(mesaj_metin)
+        top3 = ml_kategori.tahmin_topk(mesaj_metin, k=3)
+        if not top3:
+            await event.reply("⚠️ Model boş veya tahmin yapılamadı")
+            return
 
-        await event.reply(
-            f"📦 <b>Metin:</b> {mesaj_metin[:200]}\n\n"
-            f"🤖 <b>ML tahmini:</b> <code>{kat}</code> (%{int(guven*100)})\n"
-            f"🎯 <b>Hibrit sonuç:</b> <code>{hibrit_kat}</code>\n\n"
-            f"<i>Yanlışsa: /egit &lt;doğru_kategori&gt; {mesaj_metin[:50]}</i>",
-            parse_mode="html",
-        )
+        en_iyi, en_iyi_guven = top3[0]
+
+        satirlar = [f"📦 <b>Metin:</b> {mesaj_metin[:200]}", ""]
+        satirlar.append("🤖 <b>Top-3 tahmin:</b>")
+        for i, (kat, guven) in enumerate(top3, 1):
+            cubuk = "█" * int(guven * 20)
+            satirlar.append(f"  {i}. <code>{kat}</code> %{int(guven*100)}")
+            satirlar.append(f"     {cubuk}")
+        satirlar.append("")
+        satirlar.append(f"<i>Yanlışsa: /egit &lt;doğru_kategori&gt; {mesaj_metin[:50]}</i>")
+
+        await event.reply("\n".join(satirlar), parse_mode="html")
     except Exception as e:
         await event.reply(f"❌ Tahmin hatası: {e}")
+
+
+async def _ml_altkat_listele(event) -> None:
+    """Tüm ana ve alt kategorileri ağaç formatında listele."""
+    try:
+        from utils.ml_kategoriler import KATEGORI_AGAC
+        satirlar = ["🌳 <b>Kategori Hiyerarşisi</b>", ""]
+        for ana, data in KATEGORI_AGAC.items():
+            ikon = data.get("ikon", "•")
+            yazi = data.get("yazi", ana)
+            satirlar.append(f"{ikon} <b>{ana}</b> — {yazi}")
+            for alt, alt_data in data.get("alt", {}).items():
+                alt_yazi = alt_data.get("yazi", alt)
+                satirlar.append(f"   └ <code>{ana}:{alt}</code> — {alt_yazi}")
+            satirlar.append("")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Liste hatası: {e}")
+
+
+async def _ml_kfold(event) -> None:
+    """5-fold cross validation çalıştır, doğruluk raporu çıkar."""
+    await event.reply("⏳ K-fold doğruluk testi başladı, biraz bekleyin (1-2 dk)…")
+    try:
+        from utils import ml_kategori
+        loop = asyncio.get_running_loop()
+        # CPU-yoğun iş — thread'de çalıştır
+        rapor = await loop.run_in_executor(None, ml_kategori.k_fold_dogruluk, 5)
+        if "hata" in rapor:
+            await event.reply(f"❌ {rapor['hata']}")
+            return
+
+        satirlar = [
+            "📊 <b>5-Fold Cross Validation Sonucu</b>",
+            "",
+            f"🎯 <b>Genel doğruluk:</b> %{int(rapor['dogruluk']*100)} "
+            f"({rapor['toplam_dogru']}/{rapor['toplam_ornek']})",
+            "",
+            "<b>Kategori başına F1:</b>",
+        ]
+        # F1 skoruna göre sırala
+        kat_sirali = sorted(rapor["kategori"].items(), key=lambda x: -x[1]["f1"])
+        for kat, m in kat_sirali[:25]:
+            satirlar.append(
+                f"  <code>{kat[:30]:30}</code> "
+                f"F1=<b>{m['f1']}</b> "
+                f"(P={m['precision']}, R={m['recall']}, n={m['ornek']})"
+            )
+        if len(kat_sirali) > 25:
+            satirlar.append(f"  <i>… ve {len(kat_sirali)-25} kategori daha</i>")
+
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ K-fold hatası: {e}")
+
+
+async def _ml_aktif_ogrenme_listele(event) -> None:
+    """Belirsiz tahmin kuyruğunu listele."""
+    try:
+        from utils import ml_kategori
+        liste = ml_kategori.belirsiz_listele()
+        if not liste:
+            await event.reply("✨ Belirsiz tahmin yok. Modelin emin olmadığı ürün bulunmuyor.")
+            return
+        satirlar = [
+            f"🎯 <b>Belirsiz Tahminler ({len(liste)})</b>",
+            "",
+            "<i>Her birini /ogret &lt;sıra&gt; &lt;ana:alt&gt; ile etiketle</i>",
+            "",
+        ]
+        for i, ornek in enumerate(liste[:20], 1):
+            metin = ornek["metin"][:60]
+            guven = int(ornek["guven"] * 100)
+            satirlar.append(f"<b>{i}.</b> [%{guven}] <code>{ornek['tahmin']}</code>")
+            satirlar.append(f"     {metin}")
+        if len(liste) > 20:
+            satirlar.append(f"\n<i>… ve {len(liste)-20} tane daha</i>")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Liste hatası: {e}")
+
+
+async def _ml_ogret(event, mesaj_metin: str) -> None:
+    """Belirsiz kuyruktaki bir örneği etiketle ve modele kazandır.
+    Kullanım: /ogret 3 elektronik:telefon"""
+    if not mesaj_metin:
+        await event.reply(
+            "Kullanım: <code>/ogret &lt;sıra&gt; &lt;ana:alt&gt;</code>\n"
+            "Önce <code>/aktiog</code> ile listeyi gör.",
+            parse_mode="html",
+        )
+        return
+    parcalar = mesaj_metin.strip().split(maxsplit=1)
+    if len(parcalar) < 2:
+        await event.reply("⚠️ Eksik parametre.")
+        return
+    try:
+        sira = int(parcalar[0])
+    except ValueError:
+        await event.reply("⚠️ Sıra numarası geçersiz.")
+        return
+
+    kategori = parcalar[1].strip().lower()
+    try:
+        from utils import ml_kategori
+        from utils.ml_kategoriler import KATEGORI_AGAC
+
+        # Kategori doğrula
+        ana = kategori.split(":", 1)[0]
+        alt = kategori.split(":", 1)[1] if ":" in kategori else ""
+        if ana not in KATEGORI_AGAC:
+            await event.reply(
+                f"⚠️ Geçersiz ana kategori: <code>{ana}</code>\n"
+                f"Geçerli olanlar: <code>/altkat</code>",
+                parse_mode="html",
+            )
+            return
+        if alt and alt not in KATEGORI_AGAC[ana].get("alt", {}):
+            await event.reply(
+                f"⚠️ Geçersiz alt kategori: <code>{alt}</code>\n"
+                f"'{ana}' altındaki seçenekleri görmek için <code>/altkat</code>",
+                parse_mode="html",
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        basari, msg = await loop.run_in_executor(
+            None, ml_kategori.belirsiz_eslestir_ve_egit, sira, ana, alt
+        )
+        if basari:
+            await event.reply(f"✅ {msg}", parse_mode=None)
+        else:
+            await event.reply(f"⚠️ {msg}")
+    except Exception as e:
+        await event.reply(f"❌ Öğret hatası: {e}")
+
+
+async def _ml_yeniden_egit(event) -> None:
+    """Modeli baştan eğit (mevcut tüm eğitim verisiyle)."""
+    try:
+        from utils import ml_kategori
+        loop = asyncio.get_running_loop()
+        sayi = await loop.run_in_executor(None, ml_kategori.yeniden_egit)
+        await event.reply(f"✅ Model yeniden eğitildi: {sayi} örnek")
+    except Exception as e:
+        await event.reply(f"❌ Eğitim hatası: {e}")
 
 
 async def _hosgeldin_pinle(event) -> None:
