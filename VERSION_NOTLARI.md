@@ -1,54 +1,121 @@
-# FırsatPulsu v17 — Kullanıcı Bildirilen 3 Sorun Düzeltildi + ML Otomatik Öğretmen
+# FırsatPulsu v17 — Profesyonel ML + Marka Kontrolü
 
-## 🔧 Düzeltilenler
+## 🔧 Marka Kampanyası Kontrolü (Yeni Bu Turda)
 
-### 1. Telegram file reference süresi dolma hatası
-**Sorun:** "The file reference has expired" → görselli mesajlar metin olarak gönderildi.
-**Çözüm:** Görseli mesaj alındığı anda hemen `bytes` olarak indirip kuyruğa öyle koyuyoruz.
-180sn kuyruk beklemesi reference'ı geçersiz kılıyordu — artık önceden indirilmiş bytes kullanıyoruz.
+Bir önceki turda eklediğimiz "fiyat zorunlu" filtresi marka kampanyalarını
+yanlışlıkla atıyordu. Düzeltildi:
 
-### 2. Çoklu ürün parser — satır içi 3+ ürün desteği
-**Sorun:** `🔻Ürün1 285TL - Ürün2 Sepette 228TL` tek blok olarak geliyor; 2. ürün düşüyordu.
-**Çözüm:** Yeni `_satir_ici_bol()` fonksiyonu — `"X TL - Y TL"` desenini parçalıyor.
-Max blok limiti 2 → 5'e çıkarıldı.
+**Eski:** `"Adidas tüm ayakkabıda %60 indirim"` → ❌ ATILDI (fiyat yok)
+**Yeni:** `"Adidas tüm ayakkabıda %60 indirim"` → ✓ GEÇER (indirim ≥ MIN_INDIRIM)
 
-**Kullanıcı gerçek mesajı test edildi:**
+**Yeni filtre mantığı:**
 ```
-🔥Flex Track Yarış Pisti Vantuzlu 4.5 Metre
-
-✅Sepette 299TL - Premium Üyelik Ücretsiz Kargo
-🔻Frederic Patric Erkek 50ML Parfüm 285TL - Chakra String Saksılık Sepette 228TL
+Geçer eğer: somut TL fiyatı VEYA indirim yüzdesi >= MIN_INDIRIM
+Atılır:     ikisi de yoksa (gerçek fiyatsız çöp)
 ```
-→ Artık 3 blok dönüyor:
-1. Flex Track Yarış Pisti 4.5 Metre — 299 TL
-2. Frederic Patric Erkek 50ML Parfüm — 285 TL
-3. Chakra String Saksılık — 228 TL
 
-### 3. Fiyatsız mesaj sızıntısı
-**Sorun:** Bazen fiyatı olmayan mesajlar kanala geçiyordu.
-**Çözüm:** `_blok_analiz`'a somut TL fiyatı zorunluluğu eklendi.
+Test edilen senaryolar (62/62 geçti):
+- ✓ "Adidas %60 indirim" → geçer
+- ✓ "Mavi Jeans %50 indirim" → geçer
+- ✓ "iPhone 89.999 TL" → geçer (somut fiyat)
+- ✓ "Karaca ürünlerinde %5 indirim" → atlanır (MIN_INDIRIM altı)
+- ✓ "Yeni ürünlerimiz" → atlanır (ikisi de yok)
 
-## 🤖 Yeni: ML Otomatik Öğretmen
+## 🧠 ML v3 — Profesyonel Yapay Zeka Mimarisi
 
-**Sen `/ogret` ile uğraşmıyorsun.** ML belirsiz kaldığında Claude API otomatik soruluyor.
+### Yeni: 3-way Ensemble
+Tek bir Naive Bayes yerine **üç farklı sınıflandırıcı birleşimi**:
 
-### Mekanizma
-1. Yeni mesaj geldi → parser ürünü çıkardı
-2. ML kategori tahmini → güven < 0.55 ise belirsiz
-3. Claude API'ye sorulur → cevap geçerli mi diye doğrulanır
-4. Doğru kategoriler eğitim verisine eklenir (kaynak="llm")
-5. Periyodik retrain → ML giderek daha güvenli
+1. **Naive Bayes (40%)** — Bayes teoremi + TF-IDF + Laplace smoothing
+2. **Logistic Regression (40%)** — SGD, L2 regularization, 8 epoch
+3. **Prototype Cosine Similarity (20%)** — Her kategorinin "temsil vektörü"
 
-### Güvenlik
-- Kaynak takibi: manuel / auto / llm
-- Kalite eşiği: skor ≥ 50, indirim ≥ 25
-- Geçerli kategori kontrolü (ana + alt)
-- Oturum limiti: maks. 500 çağrı/gün (~$0.50 patlama önleme)
-- `ANTHROPIC_API_KEY` yoksa devre dışı
+Her model farklı şeylerde iyi:
+- NB: yeni terimlere genelleme
+- LR: ayırt edici özellikleri keskin yakalar
+- Prototip: anlamsal benzerlik (yazım hatalarına dayanıklı)
 
-## 📊 Yeni Admin Komutu
+Ağırlıklı kombinasyon → tek modelin yanlış yaptığını ensemble düzeltir.
+
+### Yeni: Hiyerarşik İki Aşamalı Sınıflandırma
+**Aşama 1:** Ana kategori belirle (`elektronik`)
+**Aşama 2:** O ana içinde alt kategori belirle (`telefon`)
+
+Her ana kategori için **kendine özel alt-model** eğitiliyor. Bu, alt
+kategoriler arasındaki ince ayrımları çok daha iyi yapar.
+
+```
+"Apple Watch SE"     → elektronik (0.95) → saat (0.87) → güven 0.83
+"iPhone 15 Pro"      → elektronik (0.99) → telefon (0.95) → güven 0.94
+```
+
+### Yeni: Türkçe Morfolojik Stemmer
+Çok eklerli kelimeleri **iteratif** çözer:
+- `telefonlarında` → `telefonların` → `telefon`
+- `ürünlerinde` → `ürünlerin` → `ürün`
+- `ayakkabılarda` → `ayakkabı`
+
+### Yeni: Karakter n-gram Fallback
+Bilinmeyen markalar/yazım hataları için karakter trigram'ları kullanır:
+- `iPhonr 15 Pro Max` → `iPhone` tokenıyla eşleşir (karakter benzerliği)
+- `Sumo Performance koşu` → koşu ayakkabısı kategorisini tanır
+
+### Yeni: Margin-Based Belirsizlik Tespiti
+En iyi 2 olasılığın farkı (margin):
+- Margin > 0.55 → güvenli, ML'in kararı kullanılır
+- Margin < 0.55 → belirsiz, **Claude API otomatik öğretmen** devreye girer
+
+### Yeni: 56 Alt Kategori
+10 ana kategori × ortalama 5.6 alt = **56 alt kategori**
+- elektronik: telefon, bilgisayar, tv, ses, saat, beyaz_esya, alet, kamera, aksesuar
+- giyim: ayakkabi, ust_giyim, alt_giyim, dis_giyim, canta, ic_giyim, aksesuar
+- kozmetik: yuz_bakim, makyaj, parfum, sac_bakim, vucut
+- ev: tekstil, mutfak, mobilya, dekor, banyo, bahce
+- market: atistir, icecek, temel, temizlik, evcil
+- spor: fitness, outdoor, bisiklet, top, su_sporu, kayak
+- oyun: lego, konsol, aksesuar, oyuncak
+- bebek: bez, beslenme, koltuk, puset, oyuncak
+- saglik: vitamin, takviye, tibbi, kisisel
+- otomotiv: lastik, yag, aku, bakim, aksesuar
+
+### Eğitim Veri Seti
+- **3159 örnek** (3017 ürün spesifik + 142 genel kategori terimi)
+- Her alt kategori için 5+ "genel terim" örneği eklendi
+  (örn. "akıllı telefon" → elektronik:telefon)
+- Bu, **marka karışıklığı** sorununu çözdü
+  (Samsung TV ile Samsung telefon doğru ayrılıyor)
+
+### Kıyaslama (k-fold cross validation, 5-katlı)
+- v2 doğruluk: %72.4
+- v3 doğruluk: **%75.3** (+%3, çok daha az aşırı güven)
+
+## 🤖 Claude API Otomatik Öğretmen
+
+ML belirsiz kaldığında (margin < 0.55), Claude otomatik öğretmen olarak
+çağrılır. Sen `/ogret` ile uğraşmıyorsun.
+
+```
+Yeni ürün → ML belirsiz? → Claude API'ye sor → Doğrulanmış cevap → ML'e öğret
+```
+
+Maliyet: ~$0.001/çağrı, oturum limiti 500 çağrı (~$0.50 patlama önleme).
+`ANTHROPIC_API_KEY` yoksa sistem otomatik fallback yapar (ML kendisi karar verir).
+
+## 📋 Admin Komutları
+- `/mlistatistik` — Model versiyonu, kategori dağılımı, kaynak istatistik
+- `/tahmin <metin>` — Top-3 tahmin (her biri için güven)
+- `/egit <ana:alt> <metin>` — Manuel eğitim örneği ekle
+- `/altkat` — Tüm 56 alt kategoriyi listele
+- `/kfold` — 5-katlı çapraz doğrulama (doğruluk + precision/recall/F1)
+- `/aktiog` — Belirsiz tahminleri listele (Claude cevap vermediği nadir durumlar)
 - `/llmistat` — Claude API çağrı sayısı, maliyet, eğitim kaynak dağılımı
+- `/yenidenegit` — Modeli sıfırdan yeniden eğit
 
-## 📈 Veri seti & test
-- 3017 eğitim örneği, 56 alt kategori
-- 60/60 test geçiyor (8 yeni test eklendi)
+## 🧪 Test Durumu
+- **62/62 test geçti**
+- Yeni testler: marka kampanyası geçer, fiyatsız+indirimsiz atılır,
+  satır içi 3 ürün parser, sepette kampanya ayrımı
+
+## 📦 Geriye Dönük Uyumluluk
+- v2 model dosyası varsa otomatik tespit, v3 olarak yeniden eğitilir
+- Tüm `tahmin()` çağrıları aynı arayüzde çalışır
