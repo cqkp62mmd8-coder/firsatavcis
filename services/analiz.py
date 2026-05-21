@@ -384,7 +384,11 @@ def indirim_turu(metin: str) -> str:
 
 # Kampanya/promo açıklaması olduğuna işaret eden kalıplar — ürün adı sayılmaz
 _KAMPANYA_KALIP = re.compile(
-    r"(sepette|kampanya|al\s*\d+\s*öde|indirim\s*devam|linkteki|tüm\s*\w+\s*ürünler"
+    # NOT: "sepette" sadece KAMPANYA bağlamında eşleşmeli:
+    #   ✓ "Sepette %20 indirim" → kampanya
+    #   ✓ "Sepette ek indirim"  → kampanya
+    #   ✗ "Sepette 228 TL"      → gerçek fiyat (eşleşmemeli)
+    r"(sepette\s*(?:%|ek|ekstra|kampanya|indirim)|kampanya|al\s*\d+\s*öde|indirim\s*devam|linkteki|tüm\s*\w+\s*ürünler"
     r"|hepsiburada\s*satıcılı|markasında|ürünlerde\s*%|ürünlerinde)",
     re.I
 )
@@ -425,7 +429,7 @@ def urun_adi_bul(metin: str) -> str | None:
         s = re.sub(r"\b[Kk]uponla\b.*", "", s)
         s = re.sub(r"\b\d+\s*[Aa]l\s*\d+\s*[ÖöOo]de\b", "", s)
         # Bağlaçlar / filler
-        s = re.sub(r"\b(?:yerine|ye geliyor|geliyor|düştü|fiyatı|piyasası|piyasa)\b", "", s, flags=re.I)
+        s = re.sub(r"\b(?:yerine|ye geliyor|geliyor|düştü|fiyatı|piyasası|piyasa|sepette|sepete)\b", "", s, flags=re.I)
         # Emojileri sök, fazla boşluk + son nokta/tire'leri at
         s = emoji_temizle(s)
         s = re.sub(r"\s+", " ", s).strip(" -–—,.|").strip()
@@ -759,29 +763,91 @@ def _urun_paragrafi_mi(paragraf: str) -> bool:
     return True
 
 
+# Satır içi ürün ayırıcı desen:
+#   "Ürün adı 285TL - Başka Ürün adı Sepette 228TL"
+_SATIR_ICI_AYIRICI = re.compile(
+    r"""
+    (?P<sol>[^\-–|]+?\b\d[\d.,]*\s*(?:TL|₺|lira))   # sol ürün + fiyat
+    \s*[\-–|]\s*                                     # ayırıcı
+    (?P<sag>[A-Za-zÇĞİÖŞÜçğıöşü][^\-–|]{8,}\d[\d.,]*\s*(?:TL|₺|lira))  # sağ ürün + fiyat
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+# İki ayrı fiyat+TL var mı? (hızlı önkontrol)
+_IKI_FIYAT_TL = re.compile(r"\d[\d.,]*\s*(?:TL|₺|lira).{2,80}?\d[\d.,]*\s*(?:TL|₺|lira)", re.I)
+
+
+def _satir_ici_iki_urun_var_mi(satir: str) -> bool:
+    """Tek satırda iki ürün+fiyat ifadesi var mı?"""
+    if not _IKI_FIYAT_TL.search(satir):
+        return False
+    if not _SATIR_ICI_AYIRICI.search(satir):
+        return False
+    return True
+
+
+def _satir_ici_bol(satir: str) -> list[str]:
+    """Tek satırı 'ürün+fiyat - ürün+fiyat' deseninde böl."""
+    if not _satir_ici_iki_urun_var_mi(satir):
+        return [satir]
+    parcalar: list[str] = []
+    kalan = satir
+    while True:
+        m = _SATIR_ICI_AYIRICI.search(kalan)
+        if not m:
+            break
+        # Sol parça: satırın başından "sol" grubunun sonuna kadar
+        sol = (kalan[: m.start("sol")] + m.group("sol")).strip()
+        if sol:
+            parcalar.append(sol)
+        # Kalan: "sag" grubu + sonrası → bir sonraki turda işlenir
+        kalan = m.group("sag") + kalan[m.end("sag"):]
+    if kalan.strip():
+        parcalar.append(kalan.strip())
+    return parcalar if len(parcalar) >= 2 else [satir]
+
+
 def _paragraf_ici_bol(paragraf: str) -> list[str]:
     """Aynı paragrafta birden fazla ürün başlığı varsa ayır.
-    Sadece şu durumda bölecek: yeni satır ürün-emoji ile başlıyor VE
-    aynı paragrafta zaten fiyat/yüzde kalıbı var."""
+
+    İki seviyeli bölme — sıralı şekilde her satıra uygulanır:
+      1) Satırlar arası: yeni ürün-emoji ile başlayan satırda öncekini kapat
+      2) Satır içi: 'ürün X TL - ürün Y TL' deseninde bu satırı da böl
+    """
     satirlar = paragraf.split("\n")
-    bloklar, mevcut = [], []
+    bloklar: list[str] = []
+    mevcut: list[str] = []
+
+    def _commit():
+        nonlocal mevcut
+        if mevcut:
+            bloklar.append("\n".join(mevcut))
+            mevcut = []
+
     for satir in satirlar:
         s_strip = satir.strip()
-        # Yeni ürün başlığı (emoji + harf-kelime) ve önceden bir şey biriktirdik
-        # mevcut bloğun ürünsel olduğunu kontrol et — fiyat ya da %
+
+        # 1) Satırlar arası bölme: yeni ürün-emoji ile başlayan satırda öncekini kapat
         if _YENI_URUN.match(s_strip) and mevcut:
             onceki = "\n".join(mevcut)
-            # Önceki blok gerçek bir ürün içeriyor mu? (fiyat/yüzde varsa evet)
             if re.search(r"[\d.,]+\s*(?:TL|₺|lira)", onceki, re.I) or re.search(r"%\d+|\d+%", onceki):
-                # Yeni satır da kelime-bazlı içerik olmalı (en az 8 karakter, en az 1 harf)
                 temizSatir = re.sub(r"[🔻🔥📦🛍️⚡🎯💎🆕\s]+", "", s_strip)
                 if len(temizSatir) >= 5 and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temizSatir):
-                    bloklar.append(onceki)
-                    mevcut = [satir]
-                    continue
-        mevcut.append(satir)
-    if mevcut:
-        bloklar.append("\n".join(mevcut))
+                    _commit()
+                    # NOT: continue YOK — bu satırın kendisi de satır içi bölmeye girebilir
+
+        # 2) Satır içi bölme: tek satırda 'ürün X TL - ürün Y TL'
+        ic_parcalar = _satir_ici_bol(satir)
+        if len(ic_parcalar) >= 2:
+            mevcut.append(ic_parcalar[0])
+            _commit()
+            for p in ic_parcalar[1:-1]:
+                bloklar.append(p)
+            mevcut.append(ic_parcalar[-1])
+        else:
+            mevcut.append(satir)
+
+    _commit()
     return bloklar
 
 
@@ -849,7 +915,8 @@ def mesaj_bolum_ayir(metin: str) -> list[str]:
 
     paylasilan_metin = "\n\n".join(paylasilan)
     sonuc = []
-    for blok in urun_bloklari[:2]:
+    # Çoklu ürün desteği — max 5 ürüne kadar
+    for blok in urun_bloklari[:5]:
         tam = (blok + "\n\n" + paylasilan_metin).strip() if paylasilan_metin else blok
         sonuc.append(tam)
     return sonuc

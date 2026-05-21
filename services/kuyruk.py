@@ -176,7 +176,13 @@ async def worker(
 
             if gorsel_medya:
                 try:
-                    raw = await client.download_media(gorsel_medya, bytes)
+                    # gorsel_medya artık bytes — mesaj alınırken indirildi (file_reference
+                    # süresi dolması önleniyor). Eski uyumluluk için MessageMediaPhoto
+                    # gelirse fallback olarak indirme deneyelim.
+                    if isinstance(gorsel_medya, (bytes, bytearray)):
+                        raw = bytes(gorsel_medya)
+                    else:
+                        raw = await client.download_media(gorsel_medya, bytes)
                     if not raw or len(raw) < 1_000:
                         raise ValueError("Görsel çok küçük")
                     buf = BytesIO(logo_ekle(raw, link=lnk))
