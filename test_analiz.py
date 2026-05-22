@@ -330,3 +330,117 @@ class TestMarkaKampanyaFiyatsizGecer:
         ind = indirim_oranini_bul(mesaj)
         assert fiyat is None
         assert ind == 0
+
+
+# ════════════════════════════════════════════════════════════════
+# v18 yeni testleri — Claude'suz, kendi başına çalışan sistem
+# ════════════════════════════════════════════════════════════════
+
+class TestDilTanima:
+    """Türkçe vs yabancı dil tespiti."""
+
+    def test_turkce_metin(self):
+        from utils import dil
+        skor = dil.turkce_skoru("Adidas tüm spor ayakkabıda %60 indirim — Türkiye geneli")
+        assert skor > 0.6, f"Türkçe metni Türkçe sayamadı (skor={skor})"
+
+    def test_ingilizce_metin(self):
+        from utils import dil
+        skor = dil.turkce_skoru("Get the new shoes with 50% off for all of our customers")
+        assert skor < 0.5, f"İngilizce metni filtreleyemedi (skor={skor})"
+
+    def test_turkce_mi_kisayol(self):
+        from utils import dil
+        assert dil.turkce_mi("İndirim Türkiye ürünleri kampanya") is True
+        # Karışık ürün adı (marka İngilizce ama yapı Türkçe) — net olmamalı
+        # genelde 0.5 civarı
+
+
+class TestMarkaOgrenme:
+    """Marka otomatik öğrenme."""
+
+    def _temiz_modul(self):
+        """marka_ogrenme'yi sıfırla — testler birbirinden bağımsız olsun."""
+        import config, importlib, tempfile, os
+        tmp = tempfile.mkdtemp(prefix="ml_test_")
+        config.DATA_DIR = tmp
+        from utils import marka_ogrenme
+        importlib.reload(marka_ogrenme)
+        marka_ogrenme._havuz = {}
+        marka_ogrenme._yuklendi = True
+        return marka_ogrenme
+
+    def test_marka_kaydet_ve_listele(self):
+        marka_ogrenme = self._temiz_modul()
+        # Aynı markayı 3 kez aynı kategoride kaydet → öğrenmeli
+        for _ in range(3):
+            marka_ogrenme.kaydet("TestMarka Yeni Ürün modeli", "elektronik")
+        kat = marka_ogrenme.marka_mi("TestMarka")
+        assert kat == "elektronik", f"Marka tanınmadı: {kat}"
+
+    def test_marka_tutarsiz_olursa_oğrenme(self):
+        marka_ogrenme = self._temiz_modul()
+        # 3 farklı kategoride 1'er kez → tutarlılık yok, marka olmamalı
+        marka_ogrenme.kaydet("Belirsiz Adı Ürün", "elektronik")
+        marka_ogrenme.kaydet("Belirsiz Adı Ürün", "giyim")
+        marka_ogrenme.kaydet("Belirsiz Adı Ürün", "kozmetik")
+        kat = marka_ogrenme.marka_mi("Belirsiz")
+        assert kat is None, f"Tutarsız marka öğrenildi: {kat}"
+
+
+class TestWebScrapingDestek:
+    """Web scraping desteklenen domain kontrolü."""
+
+    def test_destekleniyor_trendyol(self):
+        from services import scraping
+        assert scraping.destekleniyor_mu("https://www.trendyol.com/marka/urun-p-12345")
+        assert scraping.destekleniyor_mu("https://trendyol.com/x")
+
+    def test_desteklenmiyor_random(self):
+        from services import scraping
+        assert not scraping.destekleniyor_mu("https://rastgele-site.com/x")
+        assert not scraping.destekleniyor_mu("not-a-url")
+
+
+class TestBelirsizGenelKategori:
+    """ML belirsizse kategori='genel' olarak gönderilmeli (kullanıcı tercihi).
+    Bu yüzden mesajdaki kat değişkeni 'genel' olur."""
+
+    def test_belirsiz_kategori_handler_logic(self):
+        # _blok_analiz içinde mantığı kontrol et (doğrudan değil, kuralı)
+        # Kural: guven < 0.55 ise kat = "genel"
+        # Direkt teste değil, sistem davranışını izah eder.
+        from utils import ml_kategori
+        # Belirsiz bir tahmin testi
+        ana, alt, guv = ml_kategori.tahmin_hiyerarsik("xyz xyz xyz")  # çok belirsiz
+        # 'xyz xyz' eğitim verisinde olmadığı için güven düşük olmalı
+        # (kesin değer değişebilir ama esas davranış kontrolü):
+        # Bu test sadece tahmin akışının kırılmadığını doğrular.
+        assert isinstance(ana, str)
+        assert isinstance(guv, float)
+
+
+class TestKisaUrunAdi:
+    """Kısa ama gerçek ürün adları yakalanmalı, anlamsız filler atılmalı."""
+
+    def test_kisa_gercek_urun_gecer(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("Çorap 89 TL") == "Çorap"
+        assert urun_adi_bul("Lego 1.299 TL") == "Lego"
+        assert urun_adi_bul("Tişört %40 250 TL") == "Tişört"
+
+    def test_anlamsiz_filler_atilir(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("için 99 TL") is None
+        assert urun_adi_bul("Yeni 1000 TL") is None
+        assert urun_adi_bul("ürün 500 TL") is None
+
+    def test_slogan_atilir(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("Stoklar ERİYOR hemen yakala 999 TL") is None
+
+    def test_bilinmeyen_marka_gecer(self):
+        from services.analiz import urun_adi_bul
+        # Marka veritabanında olmayan ürünler de yapısal olarak yakalanmalı
+        assert urun_adi_bul("Zucchi Sabun 5x180gr 99 TL") is not None
+        assert urun_adi_bul("Vinature Doğal Sıvı Sabun 1.5L 49 TL") is not None

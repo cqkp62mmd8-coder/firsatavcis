@@ -4,14 +4,20 @@
 class TestOlustur:
     def test_temel(self):
         from services.sablon import olustur
-        m = "Test Ürün 200 TL yerine 100 TL"
+        m = "🔥 Bosch Matkap 200 TL yerine 100 TL"
         sonuc = olustur(m, 50, ["https://amzn.to/x"])
         assert sonuc is not None
         assert "%50" in sonuc
 
-    def test_sifir_indirim_none(self):
+    def test_sifir_indirim_urun_paylasilir(self):
+        """İndirim 0 olan gerçek ürün artık paylaşılır (fiyat odaklı başlık).
+        Önceden None dönüyordu — yeni davranış: şablon üretir, '%0' GEÇMEZ."""
         from services.sablon import olustur
-        assert olustur("metin", 0, []) is None
+        s = olustur("iPhone 15 Pro Max 256GB 89.999 TL",
+                    0, ["https://trendyol.com/iphone-p-12345"])
+        assert s is not None
+        assert "%0" not in s
+        assert "FIRSAT" in s or "iPhone" in s
 
     def test_negatif_ifade_filtreler(self):
         from services.sablon import olustur
@@ -21,7 +27,7 @@ class TestOlustur:
     def test_tasarruf_etiketi_buyuk(self):
         from services.sablon import olustur
         # Tasarruf TL'si artık başlıkta yok — sadece %
-        m = "Ürün 200 TL yerine 100 TL"
+        m = "🔥 Karaca Tava 200 TL yerine 100 TL"
         sonuc = olustur(m, 50, ["https://amzn.to/x"])
         assert sonuc is not None
         assert "%50" in sonuc
@@ -29,7 +35,7 @@ class TestOlustur:
     def test_tasarruf_etiketi_kucuk_gizli(self):
         from services.sablon import olustur
         # Bu test artık trivial — başlıkta hiçbir tasarruf etiketi yok
-        m = "Kalem 60 TL yerine 30 TL"
+        m = "🔥 Tencere Seti 60 TL yerine 30 TL"
         sonuc = olustur(m, 50, ["https://hb.biz/x"])
         assert "tasarruf" not in sonuc.lower()
 
@@ -43,7 +49,7 @@ class TestOlustur:
     def test_kucuk_indirim_normal(self):
         from services.sablon import olustur
         # %25 indirim → ELİT değil
-        m = "Ürün 100 TL yerine 75 TL"
+        m = "🔥 Logitech Mouse 100 TL yerine 75 TL"
         sonuc = olustur(m, 25, ["https://amzn.to/x"])
         assert "ELİT" not in sonuc
 

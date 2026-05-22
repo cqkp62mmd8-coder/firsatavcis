@@ -123,7 +123,7 @@ class TestPipeline:
         """%20 üstü = geçer."""
         _temiz_kurulum()
         from services.sablon import olustur
-        m = "Ürün 100 TL yerine 75 TL"
+        m = "🔥 Logitech Mouse 100 TL yerine 75 TL"
         sonuc = olustur(m, 25, ["https://amzn.to/x"])
         assert sonuc is not None
         assert "%25" in sonuc
