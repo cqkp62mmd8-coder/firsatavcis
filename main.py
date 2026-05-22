@@ -59,6 +59,35 @@ async def _graceful_bekle(kuyruk: asyncio.Queue, max_saniye: int = 30) -> None:
     log("SISTEM", "Graceful shutdown tamamlandı — çıkılıyor")
 
 
+# ── Günlük bakım (eski trend/segment kayıt temizliği) ────────────
+
+async def _gunluk_bakim() -> None:
+    """Her gün 04:30'da eski trend/segment kayıtlarını temizle.
+    (DB yedeği ayrı görevde — cache.gunluk_yedek)"""
+    import asyncio as _asyncio
+    from datetime import timedelta
+    from utils.log import simdi_tr
+    while True:
+        simdi = simdi_tr()
+        hedef = simdi.replace(hour=4, minute=30, second=0, microsecond=0)
+        if simdi >= hedef:
+            hedef += timedelta(days=1)
+        await _asyncio.sleep((hedef - simdi).total_seconds())
+
+        try:
+            from utils import trend
+            silinen = trend.temizle_eski(gun=30)
+            if silinen:
+                log("BILGI", f"Trend: {silinen} eski kayıt silindi")
+        except Exception as e:
+            log("UYARI", f"Trend temizlik: {e}")
+        try:
+            from utils import segment
+            segment.temizle_eski(gun=180)
+        except Exception:
+            pass
+
+
 # ── Başlangıç doğrulaması ────────────────────────────────────────
 
 def _config_dogrula() -> bool:
@@ -275,6 +304,7 @@ async def main() -> None:
                 "cache_kaydet":  lambda: cache.periyodik_kaydet(600),
                 "stok_takip":    lambda: stok_takip.kontrol_dongusu(tg.client),
                 "gunluk_yedek":  lambda: cache.gunluk_yedek(),
+                "gunluk_bakim":  lambda: _gunluk_bakim(),
                 "health":        lambda: health.baslat(kuyruk, port=_port),
             }
             _gorev_yeniden_baslat_sayilari: dict[str, int] = {}

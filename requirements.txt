@@ -1,9 +1,3 @@
 telethon>=1.36
 Pillow>=10.0
 qrcode>=7.4
-
-# Profesyonel ML (kategori sınıflandırma için)
-scikit-learn>=1.3
-snowballstemmer>=2.2
-numpy>=1.24
-scipy>=1.10

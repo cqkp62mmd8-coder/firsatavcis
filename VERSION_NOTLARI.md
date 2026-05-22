@@ -1,121 +1,81 @@
-# FırsatPulsu v17 — Profesyonel ML + Marka Kontrolü
+# FırsatPulsu v18 — Tamamen Bağımsız + 4-5 Kat Geliştirme
 
-## 🔧 Marka Kampanyası Kontrolü (Yeni Bu Turda)
+## 🔌 Claude API Tamamen Kaldırıldı
+- `services/llm.py` silindi
+- Hiçbir harici API'ye bağımlı değil
+- requirements.txt: sadece telethon, Pillow, qrcode (sklearn/numpy bile yok)
+- **Tamamen pure Python** — her şey kendi başına çalışıyor
 
-Bir önceki turda eklediğimiz "fiyat zorunlu" filtresi marka kampanyalarını
-yanlışlıkla atıyordu. Düzeltildi:
+ML belirsiz kalırsa: mesaj "genel" kategoriyle gönderilir (ürün+fiyat+indirim
+zaten var, sadece kategori etiketi belirsiz). Belirsizler /aktiog ile incelenebilir.
 
-**Eski:** `"Adidas tüm ayakkabıda %60 indirim"` → ❌ ATILDI (fiyat yok)
-**Yeni:** `"Adidas tüm ayakkabıda %60 indirim"` → ✓ GEÇER (indirim ≥ MIN_INDIRIM)
+## 🧠 6 Yeni Yapay Zeka / Analiz Katmanı
 
-**Yeni filtre mantığı:**
-```
-Geçer eğer: somut TL fiyatı VEYA indirim yüzdesi >= MIN_INDIRIM
-Atılır:     ikisi de yoksa (gerçek fiyatsız çöp)
-```
+### 1. Dil Tanıma (utils/dil.py)
+Türkçe vs yabancı dil ayrımı — karakter oranı + stop word analizi.
+Yabancı dilli (İngilizce/Fransızca) ürün mesajları otomatik filtrelenir.
+- "iPhone fiyatı çok iyi" → TR (0.65) ✓ geçer
+- "The new product with discount" → yabancı (0.10) ✗ atlanır
 
-Test edilen senaryolar (62/62 geçti):
-- ✓ "Adidas %60 indirim" → geçer
-- ✓ "Mavi Jeans %50 indirim" → geçer
-- ✓ "iPhone 89.999 TL" → geçer (somut fiyat)
-- ✓ "Karaca ürünlerinde %5 indirim" → atlanır (MIN_INDIRIM altı)
-- ✓ "Yeni ürünlerimiz" → atlanır (ikisi de yok)
+### 2. Anomali Tespiti (utils/anomali.py)
+Welford's online algoritması ile akış istatistiği öğrenir, z-score ile sapma yakalar.
+Hard kurallar:
+- %95+ indirim → şüpheli
+- <10 TL fiyat → spam
+- %30+ emoji → spam
+- Büyük harf bombası → spam
+Soft kurallar: uzunluk/fiyat z-score > 4 → anomali
 
-## 🧠 ML v3 — Profesyonel Yapay Zeka Mimarisi
+### 3. Sahte İndirim Tespiti (utils/sahte_indirim.py)
+Akakce/Cimri olmadan heuristik:
+- %95+ indirim → sahte
+- Fiyat oranı 50x+ → sahte
+- Mağaza geçmişiyle kıyas (Trendyol normalde %30 indirim verirken %85? → şüpheli)
+Her mağazanın "tipik indirim aralığı" zamanla öğrenilir.
 
-### Yeni: 3-way Ensemble
-Tek bir Naive Bayes yerine **üç farklı sınıflandırıcı birleşimi**:
+### 4. Marka Otomatik Öğrenme (utils/marka_ogrenme.py)
+E�itim setinde olmayan markaları otomatik öğrenir:
+- "Sumo Performance" 3 kez spor kategorisinde görüldü → marka olarak öğrenildi
+- Tutarlılık kontrolü (%70+ aynı kategoride)
+- ML modeline yeni bilgi olarak beslenir
 
-1. **Naive Bayes (40%)** — Bayes teoremi + TF-IDF + Laplace smoothing
-2. **Logistic Regression (40%)** — SGD, L2 regularization, 8 epoch
-3. **Prototype Cosine Similarity (20%)** — Her kategorinin "temsil vektörü"
+### 5. Trend Analizi (utils/trend.py)
+- Son 24h/7g en popüler kategoriler
+- Yükselen kategoriler (rolling baseline ile 2x+ artış tespiti)
+- En aktif mağazalar
+- /trend komutu ile rapor
 
-Her model farklı şeylerde iyi:
-- NB: yeni terimlere genelleme
-- LR: ayırt edici özellikleri keskin yakalar
-- Prototip: anlamsal benzerlik (yazım hatalarına dayanıklı)
+### 6. Web Scraping (services/scraping.py)
+Trendyol/Hepsiburada/Amazon ürün sayfalarından:
+- OpenGraph + JSON-LD + Twitter meta etiketleri
+- Gerçek ürün adı, fiyat, görsel doğrulama
+- Fiyat doğrulama (mesajdaki fiyat sayfadakiyle uyuyor mu?)
+- Rate limit + 1 saat cache
 
-Ağırlıklı kombinasyon → tek modelin yanlış yaptığını ensemble düzeltir.
-
-### Yeni: Hiyerarşik İki Aşamalı Sınıflandırma
-**Aşama 1:** Ana kategori belirle (`elektronik`)
-**Aşama 2:** O ana içinde alt kategori belirle (`telefon`)
-
-Her ana kategori için **kendine özel alt-model** eğitiliyor. Bu, alt
-kategoriler arasındaki ince ayrımları çok daha iyi yapar.
-
-```
-"Apple Watch SE"     → elektronik (0.95) → saat (0.87) → güven 0.83
-"iPhone 15 Pro"      → elektronik (0.99) → telefon (0.95) → güven 0.94
-```
-
-### Yeni: Türkçe Morfolojik Stemmer
-Çok eklerli kelimeleri **iteratif** çözer:
-- `telefonlarında` → `telefonların` → `telefon`
-- `ürünlerinde` → `ürünlerin` → `ürün`
-- `ayakkabılarda` → `ayakkabı`
-
-### Yeni: Karakter n-gram Fallback
-Bilinmeyen markalar/yazım hataları için karakter trigram'ları kullanır:
-- `iPhonr 15 Pro Max` → `iPhone` tokenıyla eşleşir (karakter benzerliği)
-- `Sumo Performance koşu` → koşu ayakkabısı kategorisini tanır
-
-### Yeni: Margin-Based Belirsizlik Tespiti
-En iyi 2 olasılığın farkı (margin):
-- Margin > 0.55 → güvenli, ML'in kararı kullanılır
-- Margin < 0.55 → belirsiz, **Claude API otomatik öğretmen** devreye girer
-
-### Yeni: 56 Alt Kategori
-10 ana kategori × ortalama 5.6 alt = **56 alt kategori**
-- elektronik: telefon, bilgisayar, tv, ses, saat, beyaz_esya, alet, kamera, aksesuar
-- giyim: ayakkabi, ust_giyim, alt_giyim, dis_giyim, canta, ic_giyim, aksesuar
-- kozmetik: yuz_bakim, makyaj, parfum, sac_bakim, vucut
-- ev: tekstil, mutfak, mobilya, dekor, banyo, bahce
-- market: atistir, icecek, temel, temizlik, evcil
-- spor: fitness, outdoor, bisiklet, top, su_sporu, kayak
-- oyun: lego, konsol, aksesuar, oyuncak
-- bebek: bez, beslenme, koltuk, puset, oyuncak
-- saglik: vitamin, takviye, tibbi, kisisel
-- otomotiv: lastik, yag, aku, bakim, aksesuar
-
-### Eğitim Veri Seti
-- **3159 örnek** (3017 ürün spesifik + 142 genel kategori terimi)
-- Her alt kategori için 5+ "genel terim" örneği eklendi
-  (örn. "akıllı telefon" → elektronik:telefon)
-- Bu, **marka karışıklığı** sorununu çözdü
-  (Samsung TV ile Samsung telefon doğru ayrılıyor)
-
-### Kıyaslama (k-fold cross validation, 5-katlı)
-- v2 doğruluk: %72.4
-- v3 doğruluk: **%75.3** (+%3, çok daha az aşırı güven)
-
-## 🤖 Claude API Otomatik Öğretmen
-
-ML belirsiz kaldığında (margin < 0.55), Claude otomatik öğretmen olarak
-çağrılır. Sen `/ogret` ile uğraşmıyorsun.
-
-```
-Yeni ürün → ML belirsiz? → Claude API'ye sor → Doğrulanmış cevap → ML'e öğret
-```
-
-Maliyet: ~$0.001/çağrı, oturum limiti 500 çağrı (~$0.50 patlama önleme).
-`ANTHROPIC_API_KEY` yoksa sistem otomatik fallback yapar (ML kendisi karar verir).
+## 🧬 ML v3 — 3-Way Ensemble (Önceki turdan)
+- Naive Bayes + Logistic Regression + Prototype Cosine
+- Hiyerarşik 2 aşamalı (ana → alt kategori)
+- 56 alt kategori, 3159 eğitim örneği
+- Kendi kendine öğrenme (yüksek güvenli tahminler → eğitim verisi)
 
 ## 📋 Admin Komutları
-- `/mlistatistik` — Model versiyonu, kategori dağılımı, kaynak istatistik
-- `/tahmin <metin>` — Top-3 tahmin (her biri için güven)
-- `/egit <ana:alt> <metin>` — Manuel eğitim örneği ekle
-- `/altkat` — Tüm 56 alt kategoriyi listele
-- `/kfold` — 5-katlı çapraz doğrulama (doğruluk + precision/recall/F1)
-- `/aktiog` — Belirsiz tahminleri listele (Claude cevap vermediği nadir durumlar)
-- `/llmistat` — Claude API çağrı sayısı, maliyet, eğitim kaynak dağılımı
-- `/yenidenegit` — Modeli sıfırdan yeniden eğit
+ML: /mlistatistik /tahmin /egit /altkat /kfold /aktiog /ogret /yenidenegit
+Analiz: /markalar /trend /segment /anomali /scrape
 
-## 🧪 Test Durumu
-- **62/62 test geçti**
-- Yeni testler: marka kampanyası geçer, fiyatsız+indirimsiz atılır,
-  satır içi 3 ürün parser, sepette kampanya ayrımı
+## 🧪 Test: 82/82 geçti
+v18 yeni testler: dil tanıma, anomali, sahte indirim, marka öğrenme
 
-## 📦 Geriye Dönük Uyumluluk
-- v2 model dosyası varsa otomatik tespit, v3 olarak yeniden eğitilir
-- Tüm `tahmin()` çağrıları aynı arayüzde çalışır
+## ⚙️ Mesaj Akışı (v18)
+```
+Mesaj → kara liste? → dil filtresi (TR mi?) → link var mı? → fiyat/indirim var mı?
+  → ürün adı çıkar → kalite skoru → SAHTE İNDİRİM? → ANOMALİ?
+  → kategori (ML v3) → mağaza → fırsat skoru
+  → [yüksek güven: pseudo-label öğren | belirsiz: genel + kaydet]
+  → marka öğrenme → kuyruk → paylaş → trend+geçmiş kaydet
+```
+
+## 📦 Bağımlılıklar
+- telethon (Telegram)
+- Pillow (görsel/logo)
+- qrcode (QR kod)
+- Python stdlib (ML, scraping, tüm analiz — harici yok!)
