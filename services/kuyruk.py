@@ -185,6 +185,15 @@ async def worker(
                         raw = await client.download_media(gorsel_medya, bytes)
                     if not raw or len(raw) < 1_000:
                         raise ValueError("Görsel çok küçük")
+
+                    # ── Görsel kalite kontrolü (v18) ──
+                    # Boyut/oran/varyans yetersiz görseller metinle gönderilir.
+                    from services.gorsel import gorsel_kaliteli_mi
+                    kaliteli, sebep = gorsel_kaliteli_mi(raw)
+                    if not kaliteli:
+                        log("UYARI", f"Görsel kalite yetersiz: {sebep} — metinle gönderiliyor")
+                        raise ValueError(f"görsel kalitesiz: {sebep}")
+
                     buf = BytesIO(logo_ekle(raw, link=lnk))
                     buf.name = "urun.png"
                     kw = dict(file=buf, parse_mode="html", silent=sessiz)
@@ -206,6 +215,18 @@ async def worker(
 
             if msg:
                 await tepki_ekle(client, msg)
+
+                # ── v18: Mesaj meta'yı segmentasyon için kaydet ──
+                try:
+                    from utils import segment
+                    segment.mesaj_kaydet(
+                        mesaj_id=msg.id,
+                        kategori=kat,
+                        magaza=magaza,
+                        indirim=indirim,
+                    )
+                except Exception as e:
+                    log("UYARI", f"Segment meta kaydı: {e}")
 
             # Yüksek skor → sabitle (pin)
             if msg and fs_skor >= 7.0:
@@ -231,6 +252,16 @@ async def worker(
                 magaza=magaza, kategori=kat, kaynak=kanal_adi,
                 indirim=indirim, skor=fs_skor,
                 veri={"tip": tip})
+
+            # v18 — Trend ve mağaza geçmişi (kendi kendine yetinen ML için)
+            try:
+                from utils import trend, sahte_indirim
+                ana_k = kat.split(":")[0] if ":" in kat else kat
+                alt_k = kat.split(":", 1)[1] if ":" in kat else ""
+                trend.kaydet(ana_k, alt_k, magaza, indirim)
+                sahte_indirim.gecmise_ekle(magaza, indirim)
+            except Exception:
+                pass
 
             # #11 Stok takibe kaydet
             if msg and lnk:

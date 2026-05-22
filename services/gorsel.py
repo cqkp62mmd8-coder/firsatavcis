@@ -1,10 +1,15 @@
 """
-Görsel işleme: logo watermark + QR kod + boyut optimizasyonu.
+Görsel işleme: kalite kontrolü + logo watermark + QR kod + boyut optimizasyonu.
+
+v18 yenilikleri:
+  • gorsel_kaliteli_mi() — çok küçük/bulanık görselleri reddet
+  • renk_yogunlugu() — beyaz/tek-renk placeholder tespiti
+  • boyut_ve_oran() — meta bilgileri
 """
 import os
 from io import BytesIO
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageStat
 try:
     import qrcode
     _QR_VAR = True
@@ -15,8 +20,62 @@ import config
 from utils.log import log
 
 # ── Sabitler ────────────────────────────────────────────────────
-HEDEF_MAX_BOYUT = 1280   # Telegram için ideal max boyut (px) — sıkıştırma azalır
-HEDEF_MIN_BOYUT = 800    # Bu altındaysa upscale yapma, küçük kalsın
+HEDEF_MAX_BOYUT = 1280
+HEDEF_MIN_BOYUT = 800
+
+
+def gorsel_kaliteli_mi(gorsel_bytes: bytes) -> tuple[bool, str]:
+    """Görselin paylaşıma uygun kalitede olup olmadığını kontrol et.
+
+    Reddedilenler:
+      • Çok küçük (< config.MIN_GORSEL_BOYUT × MIN_GORSEL_BOYUT)
+      • Tek renk / boş placeholder (varyans < 100)
+      • Aşırı uzun/kısa oran (5:1'den daha eğri)
+
+    Döner: (kaliteli_mi, sebep)
+    """
+    if not gorsel_bytes or len(gorsel_bytes) < 1000:
+        return False, f"görsel çok küçük ({len(gorsel_bytes)} bayt)"
+    try:
+        img = Image.open(BytesIO(gorsel_bytes))
+        w, h = img.size
+
+        # 1) Boyut kontrolü
+        if w < config.MIN_GORSEL_BOYUT or h < config.MIN_GORSEL_BOYUT:
+            return False, f"boyut çok küçük ({w}×{h}, min {config.MIN_GORSEL_BOYUT})"
+
+        # 2) Aşırı oran kontrolü (uzun bant gibi)
+        oran = max(w, h) / max(min(w, h), 1)
+        if oran > 5:
+            return False, f"oran aşırı ({w}×{h}, oran {oran:.1f})"
+
+        # 3) Renk varyansı — boş/tek renk placeholder kontrolü
+        # Küçült ki hızlı olsun
+        kucuk = img.convert("RGB").resize((100, 100), Image.LANCZOS)
+        stat = ImageStat.Stat(kucuk)
+        # Varyans her renk kanalı için, ortalama al
+        ort_varyans = sum(stat.var) / 3
+        if ort_varyans < 100:   # neredeyse tek renk
+            return False, f"görsel boş/placeholder (varyans={ort_varyans:.0f})"
+
+        return True, ""
+    except Exception as e:
+        return False, f"görsel açılamadı: {e}"
+
+
+def boyut_ve_oran(gorsel_bytes: bytes) -> dict:
+    """Görsel meta bilgileri — debug için."""
+    try:
+        img = Image.open(BytesIO(gorsel_bytes))
+        w, h = img.size
+        return {
+            "genislik": w,
+            "yukseklik": h,
+            "format": img.format,
+            "boyut_bayt": len(gorsel_bytes),
+        }
+    except Exception:
+        return {}
 
 
 def _optimize_boyut(img: Image.Image) -> Image.Image:
