@@ -96,7 +96,7 @@ def _tasarruf_format(tasarruf: int) -> str:
 def _baslik(indirim: int, tur: str, fs: float, tasarruf: int) -> str:
     """Tek satır, kontrastlı başlık.
     VIP rozet: skor 8+ veya indirim 70+
-    Tasarruf etiketi: ≥50 TL ise yanına ekle"""
+    İndirim 0 (oran belirtilmemiş ürün): fiyat odaklı başlık."""
     # VIP modu
     vip = fs >= 8.0 or indirim >= 70
 
@@ -105,6 +105,12 @@ def _baslik(indirim: int, tur: str, fs: float, tasarruf: int) -> str:
             return f"💎 <b>ELİT MARKA KAMPANYASI — %{indirim}'ye varan</b>"
         return f"🏷️ <b>MARKA KAMPANYASI — %{indirim}'ye varan</b>"
 
+    # İndirim oranı yok (0) — fiyat/fırsat odaklı başlık, "%0 İNDİRİM" YAZMA
+    if indirim <= 0:
+        if vip:
+            return "💎 <b>ELİT FIRSAT</b>"
+        return "🔥 <b>FIRSAT ÜRÜNÜ</b>"
+
     # Ürün — sadece %
     if vip:
         return f"💎 <b>ELİT FIRSAT — %{indirim} İNDİRİM</b>"
@@ -112,7 +118,7 @@ def _baslik(indirim: int, tur: str, fs: float, tasarruf: int) -> str:
         return f"🎯 <b>%{indirim} İNDİRİM</b>"
     if indirim >= 30:
         return f"💰 <b>%{indirim} İNDİRİM</b>"
-    return f"<b>%{indirim} İNDİRİM</b>"
+    return f"💰 <b>%{indirim} İNDİRİM</b>"
 
 
 # ── Hashtag ─────────────────────────────────────────────────────
@@ -236,7 +242,12 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
 # ── Tek ürün şablonu ────────────────────────────────────────────
 
 def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None) -> str | None:
-    if indirim <= 0 or negatif_mi(metin):
+    # NOT: indirim <= 0 olan ürünleri de paylaşıyoruz (fiyat odaklı başlık).
+    # Sadece negatif/yasak içerik reddedilir.
+    if negatif_mi(metin):
+        return None
+    # Ürün adı yoksa (slogan/CTA-only mesaj) — marka kampanyası değilse paylaşma
+    if not urun_adi_bul(metin) and indirim_turu(metin) != "marka":
         return None
     bl  = buton_linkleri or []
     lnk = link_bul(metin, bl)

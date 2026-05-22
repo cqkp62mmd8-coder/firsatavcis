@@ -400,7 +400,28 @@ _URUN_BAS = re.compile(r"^[🔥🔻📦👚🎯💡🛍✅⚡🎁⭐🆕💎🏆
 
 def urun_adi_bul(metin: str) -> str | None:
     """Mesajdan ürün adını çıkarır.
-    Öncelik: ürün başlık emoji'si + ≥10 karakter + harf içeren satır."""
+
+    BİRİNCİL: öğrenen model (utils.urun_taniyici) — her kelimeyi
+    ÜRÜN/FILLER olarak sınıflandırır, slogan/dolgu cümlelerini eler.
+    YEDEK: model yüklenemezse aşağıdaki yapısal yöntem devreye girer.
+    """
+    if not metin:
+        return None
+
+    # ── Model tabanlı tanıma (öğrenen sınıflandırıcı) ──
+    try:
+        from utils import urun_taniyici
+        ad = urun_taniyici.urun_adi_cikar(metin)
+        if ad:
+            return ad
+    except Exception:
+        pass   # model hatası → yapısal yedek
+
+    return _urun_adi_bul_yapisal(metin)
+
+
+def _urun_adi_bul_yapisal(metin: str) -> str | None:
+    """Yedek yöntem — model yoksa yapısal kurallar."""
     if not metin:
         return None
 
@@ -430,6 +451,13 @@ def urun_adi_bul(metin: str) -> str | None:
         s = re.sub(r"\b\d+\s*[Aa]l\s*\d+\s*[ÖöOo]de\b", "", s)
         # Bağlaçlar / filler
         s = re.sub(r"\b(?:yerine|ye geliyor|geliyor|düştü|fiyatı|piyasası|piyasa|sepette|sepete)\b", "", s, flags=re.I)
+        # Kargo / teslimat / üyelik takıları (ürün adının parçası değil)
+        s = re.sub(r"\b(?:ücretsiz|bedava)\s*kargo\b", "", s, flags=re.I)
+        s = re.sub(r"\bkargo\s*(?:bedava|ücretsiz|dahil)\b", "", s, flags=re.I)
+        s = re.sub(r"\b(?:premium|plus|pro)\s*üyelik(?:le)?\b", "", s, flags=re.I)
+        s = re.sub(r"\baynı\s*gün\s*(?:kargo|teslimat)\b", "", s, flags=re.I)
+        s = re.sub(r"\bhızlı\s*(?:kargo|teslimat)\b", "", s, flags=re.I)
+        s = re.sub(r"\bstokta\b", "", s, flags=re.I)
         # Emojileri sök, fazla boşluk + son nokta/tire'leri at
         s = emoji_temizle(s)
         s = re.sub(r"\s+", " ", s).strip(" -–—,.|").strip()
@@ -454,6 +482,17 @@ def urun_adi_bul(metin: str) -> str | None:
         re.I,
     )
 
+    # Slogan / CTA cümleleri — ürün adı DEĞİL (pazarlama lafları)
+    _SLOGAN_KALIP = re.compile(
+        r"(stoklar?\s*eri|hemen\s*(?:yakala|al|koş|tıkla|sipariş)|kaçırma|"
+        r"son\s*(?:fırsat|şans|gün|saat|dakika)|fırsatı?\s*kaçırma|"
+        r"acele\s*et|tükenmeden|bitmeden|sınırlı\s*(?:stok|sayıda|süre)|"
+        r"süper\s*fiyat|inanılmaz\s*(?:fiyat|fırsat)|kaçmaz|"
+        r"şok\s*fiyat|büyük\s*indirim|dev\s*kampanya|"
+        r"sadece\s*bugün|bugüne\s*özel|sepete\s*at)",
+        re.I,
+    )
+
     def _etiket_satiri_mi(satir: str) -> bool:
         """'İndirimli Fiyat:' veya 'Amazon TR' gibi 'gerçek ürün adı değil' satırı mı."""
         temiz = emoji_temizle(satir).strip(" -–—,.:|🛒🏪🛍️").strip()
@@ -463,7 +502,31 @@ def urun_adi_bul(metin: str) -> str | None:
             return True
         if _SITE_ADLARI.match(temiz):
             return True
+        if _SLOGAN_KALIP.search(temiz):
+            return True
         return False
+
+    # Anlamsız tek-kelime ürün adlarını engelle (fiyat çıkınca kalan filler)
+    _GENEL_KELIME = frozenset({
+        "için", "adet", "yeni", "süper", "harika", "muhteşem", "kaçırma",
+        "ürün", "fırsat", "kampanya", "indirim", "tane", "paket", "set",
+        "model", "renk", "beden", "boyut", "stok", "stokta", "bugün",
+        "şimdi", "hemen", "özel", "sınırlı", "son", "büyük", "küçük",
+        "fiyat", "fiyatı", "ucuz", "pahalı", "kaliteli", "orjinal", "orijinal",
+    })
+
+    def _gecerli_urun_adi(temiz: str) -> bool:
+        """Temizlenmiş metin gerçek bir ürün adı mı?
+        Tek kelimeyse ve genel/filler kelimeyse reddet."""
+        if len(temiz) < 4:
+            return False
+        if not re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temiz):
+            return False
+        kelimeler = temiz.split()
+        # Tek kelime VE genel filler ise ürün adı değil
+        if len(kelimeler) == 1 and kelimeler[0].lower() in _GENEL_KELIME:
+            return False
+        return True
 
     # Öncelik 1: ürün başlık emoji'siyle başlayan satırlar (en ürünsel)
     for satir in satirlar:
@@ -481,7 +544,7 @@ def urun_adi_bul(metin: str) -> str | None:
         # _temizle sonrası ortaya çıkan da hâlâ etiket olabilir
         if _etiket_satiri_mi(temiz):
             continue
-        if len(temiz) >= 10 and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temiz):
+        if _gecerli_urun_adi(temiz):
             return temiz[:80]
 
     # Öncelik 2: emoji yok ama temiz uzun ürün adı (fiyatsız)
@@ -513,9 +576,13 @@ def urun_adi_bul(metin: str) -> str | None:
         if _etiket_satiri_mi(satir):
             continue
         temiz = _temizle(satir)
+        if _etiket_satiri_mi(temiz):
+            continue
+        # Fiyat çıkarıldıktan sonra ≥4 karakter + ≥3 harfli kelime kaldıysa
+        # gerçek ürün adı say (örn. "Çorap", "Kettle", "Lego" gibi kısa adlar).
+        # Eşik 8→4: kısa ama geçerli ürün adlarını kaybetme.
         if (
-            len(temiz) >= 8
-            and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temiz)
+            _gecerli_urun_adi(temiz)
             and not temiz.lower().startswith(("kupon", "indirim", "sepette", "hepsipara", "premiuma",
                                               "fiyat", "normal", "liste", "indirimli", "piyasa"))
         ):
@@ -546,6 +613,61 @@ _REF_PARAMS = {
     # N11
     "searchterm",
 }
+
+
+def urun_kimligi(url: str) -> str:
+    """URL'den ürün kimliği çıkar. Aynı ürünün farklı linkleri (farklı
+    affiliate tag, ref param) aynı kimliği döner. İki FARKLI ürün ise
+    iki farklı kimlik döner.
+
+    Kullanım: bir mesajda toplanan linklerin kaç farklı ürüne ait
+    olduğunu tespit etmek için.
+    """
+    if not url:
+        return ""
+    u = url.lower()
+    # Amazon: /dp/XXXXXXXXXX veya /gp/product/XXXXXXXXXX
+    m = re.search(r'/(?:dp|gp/product)/([a-z0-9]{10})', u)
+    if m:
+        return f"amazon:{m.group(1)}"
+    # Trendyol: -p-NNNNNN
+    m = re.search(r'-p-(\d+)', u)
+    if m:
+        return f"trendyol:{m.group(1)}"
+    # Hepsiburada: -pNNNNNNNN, -p-XXXX
+    m = re.search(r'-p-?([a-z0-9]{6,})', u)
+    if m:
+        return f"hb:{m.group(1)}"
+    # N11: /urun/... veya /NNNNNN
+    m = re.search(r'/urun/([a-z0-9\-]+)', u)
+    if m:
+        return f"n11:{m.group(1)[:40]}"
+    # Kısa linkler: tam path kimlik sayılır (çözülemez, ayrı tut)
+    try:
+        p = urlparse(url)
+        if any(k in p.netloc for k in ("ty.gl", "hb.gl", "amzn.to", "sl.n11", "hb.biz", "dlvr.it", "bit.ly")):
+            return f"kisa:{p.netloc}{p.path}"
+        return f"{p.netloc}{p.path}"
+    except Exception:
+        return url
+
+
+def urun_kimligine_gore_grupla(linkler: list[str]) -> list[str]:
+    """Bir link listesini ürün kimliğine göre grupla.
+    Her benzersiz ürün için TEK temsilci link döner (öncelikli olanı).
+
+    Örnek:
+      ['amazon.com.tr/dp/X?tag=a', 'amazon.com.tr/dp/X?ref=b', 'trendyol.com/y-p-2']
+      → ['amazon.com.tr/dp/X', 'trendyol.com/y-p-2']   (2 ürün)
+    """
+    if not linkler:
+        return []
+    gorulen: dict[str, str] = {}   # kimlik → temsilci link
+    for lnk in linkler:
+        kimlik = urun_kimligi(lnk)
+        if kimlik and kimlik not in gorulen:
+            gorulen[kimlik] = link_temizle(lnk)
+    return list(gorulen.values())
 
 
 def link_temizle(url: str) -> str:
