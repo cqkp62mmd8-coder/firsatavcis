@@ -242,8 +242,10 @@ async def main() -> None:
     try:
         from utils import ml_kategori
         ml_kategori.ilk_kurulum()
+        from utils import urun_taniyici
+        urun_taniyici.ilk_kurulum()
     except Exception as e:
-        log("UYARI", f"ML kategori modeli yüklenemedi: {e}")
+        log("UYARI", f"ML modelleri yüklenemedi: {e}")
 
     kuyruk: asyncio.Queue = asyncio.Queue(maxsize=50)
 
