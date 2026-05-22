@@ -40,8 +40,13 @@ _YARDIM = (
     "/kfold — 5-fold cross validation (doğruluk testi)\n"
     "/aktiog — Belirsiz tahminleri listele\n"
     "/ogret &lt;sira&gt; &lt;ana:alt&gt; — Belirsizi manuel etiketle\n"
-    "/llmistat — Claude API çağrı sayısı + maliyet\n"
     "/yenidenegit — Modeli sıfırdan yeniden eğit\n"
+    "\n<b>Yapay Zeka & Analiz (v18):</b>\n"
+    "/markalar — Otomatik öğrenilmiş markalar\n"
+    "/trend — Son 24h/7g trend raporu\n"
+    "/segment — Kullanıcı tıklama analizi\n"
+    "/anomali — Anomali tespit istatistikleri\n"
+    "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
 )
 
@@ -161,8 +166,21 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
         elif komut == "/yenidenegit":
             await _ml_yeniden_egit(event)
 
-        elif komut == "/llmistat":
-            await _llm_istatistik(event)
+        # ── v18 yeni komutlar ──
+        elif komut == "/markalar":
+            await _markalar_listele(event)
+
+        elif komut == "/trend":
+            await _trend_raporu(event)
+
+        elif komut == "/segment":
+            await _segment_raporu(event)
+
+        elif komut == "/scrape":
+            await _scrape_test(event, mesaj_metin)
+
+        elif komut == "/anomali":
+            await _anomali_raporu(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -300,8 +318,7 @@ async def _ml_istatistik(event) -> None:
             "<b>Eğitim verisi kaynağı:</b>",
             f"  • Varsayılan: <b>{kaynak.get('varsayilan', 0)}</b>",
             f"  • Manuel (/egit): <b>{kaynak.get('manuel', 0)}</b>",
-            f"  • Otomatik (yüksek güven): <b>{kaynak.get('auto', 0)}</b>",
-            f"  • LLM öğretmen: <b>{kaynak.get('llm', 0)}</b>",
+            f"  • Otomatik (kendi kendine öğrenme): <b>{kaynak.get('auto', 0)}</b>",
         ]
         if ist.get("belirsiz_bekleyen"):
             satirlar.append(f"\n⚠️ Belirsiz tahmin bekleyen: <b>{ist['belirsiz_bekleyen']}</b>")
@@ -311,7 +328,7 @@ async def _ml_istatistik(event) -> None:
         for kat, sayi in sorted(ist["kategori_sayilari"].items(), key=lambda x: -x[1])[:10]:
             satirlar.append(f"  {kat:25} {sayi}")
         satirlar.append("")
-        satirlar.append("<i>Komutlar: /tahmin, /egit, /kfold, /altkat, /llmistat</i>")
+        satirlar.append("<i>Komutlar: /tahmin, /egit, /kfold, /altkat, /trend, /marka, /anomali</i>")
         await event.reply("\n".join(satirlar), parse_mode="html")
     except Exception as e:
         await event.reply(f"❌ ML modülü hatası: {e}")
@@ -549,43 +566,186 @@ async def _ml_yeniden_egit(event) -> None:
         await event.reply(f"❌ Eğitim hatası: {e}")
 
 
-async def _llm_istatistik(event) -> None:
-    """Claude API çağrı sayısı + tahmini maliyet.
-
-    Otomatik öğretmen olarak kaç kez çağrıldığı, bu oturumdaki
-    yaklaşık maliyeti gösterir.
-    """
+async def _markalar_listele(event) -> None:
+    """Otomatik öğrenilmiş markaları + bekleyen adayları listele."""
     try:
-        from services import llm
-        ist = llm.oturum_istatistik()
+        from utils import marka_ogrenme
+        ist = marka_ogrenme.istatistik()
+        markalar = marka_ogrenme.marka_listesi()
+        adaylar = marka_ogrenme.aday_listesi(limit=15)
 
-        # Maliyet tahmini: Haiku 4.5 → ~$0.001 per call (kısa promptlarda)
-        cagri = ist.get("oturum_cagri", 0)
-        tahmini_maliyet = cagri * 0.001
+        satirlar = [
+            "🏷️ <b>Marka Öğrenme Sistemi</b>",
+            "",
+            f"📊 Toplam kayıt: <b>{ist['toplam_kayit']}</b>",
+            f"✅ Öğrenilmiş marka: <b>{ist['ogrenilen_marka']}</b>",
+            f"⏳ Bekleyen aday: <b>{ist['marka_adayi']}</b>",
+            "",
+        ]
+        if markalar:
+            satirlar.append("<b>Öğrenilmiş markalar (top 20):</b>")
+            for m in sorted(markalar, key=lambda x: -x["sayim"])[:20]:
+                satirlar.append(f"  • <b>{m['marka']}</b> → {m['kategori']} ({m['sayim']} örnek)")
+        else:
+            satirlar.append("<i>Henüz hiç marka öğrenilmedi — daha çok mesaj akışına ihtiyaç var.</i>")
 
-        # ML eğitim verisi içinde 'llm' kaynağıyla eklenenler
-        from utils import ml_kategori
-        ml_ist = ml_kategori.istatistik()
-        kaynak_dagilim = ml_ist.get("kaynak_dagilim", {})
-        llm_egitim = kaynak_dagilim.get("llm", 0)
-        auto_egitim = kaynak_dagilim.get("auto", 0)
-        manuel_egitim = kaynak_dagilim.get("manuel", 0)
+        if adaylar:
+            satirlar.append("")
+            satirlar.append("<b>Marka adayı (yakında öğrenilecek):</b>")
+            for a in adaylar[:10]:
+                kat_str = ", ".join(f"{k}:{v}" for k, v in a["kategoriler"].items())
+                satirlar.append(f"  • {a['aday']} (top: {a['toplam']}, {kat_str})")
 
-        msg = (
-            "🤖 <b>Claude API Otomatik Öğretmen</b>\n\n"
-            f"<b>Durum:</b> {'🟢 Aktif' if ist['aktif'] else '🔴 Devre dışı'}\n"
-            f"<b>Oturum çağrısı:</b> {cagri} / {ist['limit']}\n"
-            f"<b>Tahmini maliyet:</b> ~${tahmini_maliyet:.3f}\n\n"
-            "<b>ML eğitim verisi kaynak dağılımı:</b>\n"
-            f"  • LLM öğretmen: <b>{llm_egitim}</b> örnek\n"
-            f"  • Otomatik (yüksek güven): <b>{auto_egitim}</b> örnek\n"
-            f"  • Manuel (/egit): <b>{manuel_egitim}</b> örnek\n\n"
-            "<i>LLM aktifse, ML belirsiz kaldığında otomatik soru sorulur "
-            "ve cevap modelin eğitim verisine eklenir. Sen hiç müdahale etmezsin.</i>"
-        )
-        await event.reply(msg, parse_mode="html")
+        await event.reply("\n".join(satirlar), parse_mode="html")
     except Exception as e:
-        await event.reply(f"❌ İstatistik hatası: {e}")
+        await event.reply(f"❌ Marka listesi hatası: {e}")
+
+
+async def _trend_raporu(event) -> None:
+    """Son 24h/7g trend raporu."""
+    try:
+        from utils import trend
+        son_24 = trend.son_n_saat(24)
+        son_168 = trend.son_n_saat(168)   # 7 gün
+        yukselen = trend.yukselen_kategoriler(24)
+
+        satirlar = [
+            "📈 <b>Trend Raporu</b>",
+            "",
+            f"🕐 Son 24 saat: <b>{son_24['toplam']}</b> paylaşım",
+            f"📅 Son 7 gün: <b>{son_168['toplam']}</b> paylaşım",
+            "",
+            "<b>Son 24h - En Popüler Kategoriler:</b>",
+        ]
+        if son_24["kategoriler"]:
+            for kat, sayi in son_24["kategoriler"][:8]:
+                satirlar.append(f"  • {kat:25} <b>{sayi}</b>")
+        else:
+            satirlar.append("  <i>(henüz veri yok)</i>")
+
+        satirlar.append("\n<b>Son 7 gün - Genel Eğilim:</b>")
+        if son_168["kategoriler"]:
+            for kat, sayi in son_168["kategoriler"][:8]:
+                satirlar.append(f"  • {kat:25} <b>{sayi}</b>")
+        else:
+            satirlar.append("  <i>(henüz veri yok)</i>")
+
+        if yukselen:
+            satirlar.append("\n🔥 <b>Yükselen Kategoriler (son 24h):</b>")
+            for kat, oran in yukselen[:5]:
+                satirlar.append(f"  • <b>{kat}</b> → <b>{oran}x</b> artış")
+
+        if son_24["magazalar"]:
+            satirlar.append("\n<b>En Aktif Mağazalar (24h):</b>")
+            for m, sayi, ort_ind in son_24["magazalar"][:8]:
+                satirlar.append(f"  • {m:25} <b>{sayi}</b> paylaşım (ort %{ort_ind} ind.)")
+
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Trend raporu hatası: {e}")
+
+
+async def _segment_raporu(event) -> None:
+    """Kullanıcı segmentasyon — tıklama analizi."""
+    try:
+        from utils import segment
+        ist = segment.istatistik()
+        populer_kat = segment.populer_kategoriler(gun=7)[:10]
+        populer_mag = segment.populer_magazalar(gun=7)[:10]
+        supheli = segment.supheli_magazalar(gun=30)
+        saatler = segment.saatlik_aktivite(gun=7)
+
+        satirlar = [
+            "👥 <b>Kullanıcı Segmentasyon</b>",
+            "",
+            f"📊 Toplam tıklama: <b>{ist.get('toplam_tikla', 0)}</b>",
+            f"🔥 İyi oy: <b>{ist.get('iyi_oy', 0)}</b>",
+            f"❌ Sahte oy: <b>{ist.get('sahte_oy', 0)}</b>",
+            f"👤 Benzersiz kullanıcı: <b>{ist.get('benzersiz_kullanici', 0)}</b>",
+            "",
+        ]
+
+        if populer_kat:
+            satirlar.append("<b>En Popüler Kategoriler (7gün):</b>")
+            for k in populer_kat:
+                satirlar.append(
+                    f"  • {k['kategori']:20} 🔥{k['iyi_oy']} ❌{k['sahte_oy']}"
+                )
+
+        if populer_mag:
+            satirlar.append("\n<b>En Popüler Mağazalar (7gün):</b>")
+            for m in populer_mag:
+                satirlar.append(
+                    f"  • {m['magaza']:25} 🔥{m['iyi_oy']} ❌{m['sahte_oy']}"
+                )
+
+        if supheli:
+            satirlar.append("\n⚠️ <b>Şüpheli Mağazalar (sahte &gt; iyi):</b>")
+            for m in supheli:
+                satirlar.append(f"  • {m['magaza']}: ❌{m['sahte_oy']} vs 🔥{m['iyi_oy']}")
+
+        # En aktif 3 saat
+        if any(saatler):
+            en_aktif = sorted(enumerate(saatler), key=lambda x: -x[1])[:3]
+            satirlar.append("\n⏰ <b>En Aktif Saatler (7gün):</b>")
+            for saat, sayi in en_aktif:
+                if sayi > 0:
+                    satirlar.append(f"  • {saat:02d}:00 — <b>{sayi}</b> tıklama")
+
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Segment raporu hatası: {e}")
+
+
+async def _scrape_test(event, url: str) -> None:
+    """Bir URL'yi scraping ile test et."""
+    url = (url or "").strip()
+    if not url or not url.startswith(("http://", "https://")):
+        await event.reply("Kullanım: /scrape https://www.trendyol.com/...")
+        return
+    try:
+        from services import scraping
+        if not scraping.destekleniyor_mu(url):
+            await event.reply(
+                f"❌ Bu domain desteklenmiyor.\n"
+                f"<i>Desteklenenler:</i> Trendyol, Hepsiburada, Amazon TR, "
+                f"N11, Teknosa, Gratis, Boyner, MediaMarkt, Vatan, Morhipo, Watsons",
+                parse_mode="html"
+            )
+            return
+        bilgi = scraping.urun_bilgisi(url)
+        if not bilgi:
+            await event.reply("❌ Sayfa açılamadı veya meta veri yok.")
+            return
+        satirlar = [
+            "🌐 <b>Web Scrape Sonucu</b>",
+            "",
+            f"<b>Mağaza:</b> {bilgi.get('magaza', '-')}",
+            f"<b>Ürün adı:</b> {bilgi.get('ad') or '<i>bulunamadı</i>'}",
+            f"<b>Fiyat:</b> {bilgi.get('fiyat') or '<i>bulunamadı</i>'} TL",
+            f"<b>Stok:</b> {bilgi.get('stok') or '<i>belirsiz</i>'}",
+            f"<b>Görsel:</b> {'✓ var' if bilgi.get('gorsel') else '<i>yok</i>'}",
+        ]
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Scrape hatası: {e}")
+
+
+async def _anomali_raporu(event) -> None:
+    """Anomali tespit istatistikleri."""
+    try:
+        from utils import anomali
+        ist = anomali.istatistik()
+        satirlar = ["🚨 <b>Anomali Tespit Sistemi</b>", ""]
+        satirlar.append("<b>Öğrenilmiş normaller</b> (z-score temeli):")
+        for ad, s in ist.items():
+            satirlar.append(f"  • {ad}: n={s['n']}, ort={s['ort']}, std={s['std']}")
+        satirlar.append("")
+        satirlar.append("<i>Bu eşiklerden 4+ sapma → mesaj atılır</i>")
+        satirlar.append("<i>Hard kurallar: %95+ indirim, &lt;10 TL fiyat, %30+ emoji</i>")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Anomali rapor hatası: {e}")
 
 
 async def _hosgeldin_pinle(event) -> None:

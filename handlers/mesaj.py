@@ -18,7 +18,6 @@ from services.analiz import (
     mesaj_bolum_ayir,
 )
 from services.sablon import olustur as sablon_olustur, olustur_coklu
-from services import llm
 from schedulers.gunluk import ekle as gunluk_ekle
 from utils.cache import gorulmus_var_mi, gorulmus_ekle
 from utils.log import log
@@ -46,12 +45,22 @@ def _kara_liste_eslesir(metin: str) -> bool:
 
 def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
     """Bir bloğu analiz edip dict döner; geçersizse None.
-    Regex zayıf kalırsa (link var ama indirim/ürün adı bulunamamış) LLM fallback dener."""
+    Kendi kendine yetinen sistem — harici API yok."""
     onizleme = blok[:50].replace("\n", " ")
 
     if _kara_liste_eslesir(blok):
         log("FILTRE", f"Kara liste → atlandı: '{onizleme}…'")
         return None
+
+    # ── Dil filtresi: yabancı dilli mesajları filtrele ──
+    try:
+        from utils import dil
+        tr_skor = dil.turkce_skoru(blok)
+        if tr_skor < 0.30:   # net yabancı
+            log("FILTRE", f"Yabancı dil (TR skor={tr_skor:.2f}) → atlandı: '{onizleme}…'")
+            return None
+    except Exception:
+        pass   # dil tanıma başarısız → devam et
 
     indirim = indirim_oranini_bul(blok)
     lnk = link_bul(blok, btn_links)
@@ -63,11 +72,6 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
         return None
 
     # ── Fiyat VEYA indirim sinyali zorunlu ──
-    # Meşru iki senaryo:
-    #   (a) Somut TL fiyatı var (örn. "iPhone 89.999 TL")
-    #   (b) Marka/mağaza kampanyası → fiyat yok ama yüzde var
-    #       (örn. "Adidas tüm ayakkabıda %60 indirim")
-    # İkisi de yoksa fiyatsız çöp → atla.
     from services.analiz import fiyat_bul
     _eski_fiyat, _yeni_fiyat, _, _ = fiyat_bul(blok)
     if not _yeni_fiyat and indirim < config.MIN_INDIRIM:
@@ -76,20 +80,6 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
 
     from services.analiz import urun_adi_bul
     urun = urun_adi_bul(blok)
-
-    # ── LLM fallback ────────────────────────────────────────────
-    # Link var ama indirim eksik veya ürün adı eksik → LLM'e sor
-    if llm.aktif_mi() and (indirim < config.MIN_INDIRIM or not urun):
-        # Tekrar dene LLM ile
-        log("BILGI", f"Regex zayıf, LLM deneniyor: '{onizleme}…'")
-        llm_sonuc = llm.parse_et(blok)
-        if llm_sonuc:
-            yeni_ind = int(llm_sonuc.get("indirim_yuzdesi") or 0)
-            yeni_urun = llm_sonuc.get("urun_adi")
-            if yeni_ind > indirim:
-                indirim = yeni_ind
-            if not urun and yeni_urun:
-                urun = yeni_urun
 
     if indirim < config.MIN_INDIRIM:
         log("FILTRE", f"İndirim %{indirim} < {config.MIN_INDIRIM} → atlandı: '{onizleme}…'")
@@ -104,51 +94,85 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
         log("FILTRE", f"Kalite {skor} < {config.MIN_KALITE} → atlandı: '{onizleme}…'")
         return None
 
+    # ── Sahte indirim tespiti (heuristik) ──
+    try:
+        from utils import sahte_indirim
+        magaza_n = magaza_bul(blok, lnk)
+        sahte, sebep = sahte_indirim.sahte_mi(_eski_fiyat, _yeni_fiyat, indirim, magaza_n)
+        if sahte:
+            log("FILTRE", f"Sahte indirim → atlandı: '{onizleme}…' ({sebep})")
+            return None
+    except Exception:
+        pass
+
+    # ── Anomali tespiti (z-score tabanlı) ──
+    try:
+        from utils import anomali
+        link_sayi = len(btn_links) + (1 if lnk else 0)
+        anormalmi, sebep_an = anomali.kontrol_et(
+            blok,
+            fiyat=_yeni_fiyat if _yeni_fiyat else None,
+            indirim=indirim,
+            link_sayi=link_sayi,
+        )
+        if anormalmi:
+            log("FILTRE", f"Anomali → atlandı: '{onizleme}…' ({sebep_an})")
+            return None
+    except Exception:
+        pass
+
     magaza = magaza_bul(blok, lnk)
     kat, _, _ = kategori_bul(blok)
     fs = firsat_skoru(blok, indirim, btn_links)
 
     # ════════════════════════════════════════════════════════════
-    # Otomatik öğrenme (v17) — ML'i kendi kendine yetkin hale getir
+    # KENDI KENDİNE ÖĞRENME (v18) — Claude bağımsız
     # ════════════════════════════════════════════════════════════
     #
-    # Strateji:
-    #  A) ML yüksek güvende ise (>=0.7) ve fırsat kaliteliyse → veriye ekle
-    #  B) ML belirsiz/düşük güvende (<0.55) → Claude'a sor (otomatik öğretmen)
-    #     - Cevap geldiyse kaynak="llm" olarak veriye ekle
-    #     - Ücretsiz değil ama kullanıcı manuel /ogret zahmetinden kurtulur
-    #  C) Sadece kaliteli ve uzun ürün adlarında öğren (gürültüyü engelle)
+    # Self-Supervised Learning:
+    #   • Yüksek güvenli tahminler → eğitim verisine eklenir (pseudo-label)
+    #   • Belirsiz tahminler → mesaj 'genel' kategori ile gönderilir
+    #   • Marka otomatik öğrenme → bilinmeyen sık token "marka adayı"
     try:
         if urun and skor >= 50 and indirim >= 25 and len(urun) >= 10:
             from utils import ml_kategori
             from services.analiz import kategori_bul_tam
             ana_k, alt_k, guven = kategori_bul_tam(blok)
 
-            if guven >= 0.7 and ana_k == kat and ana_k != "genel":
-                # A) ML kendinden emin — direkt öğren
+            if guven >= 0.75 and ana_k != "genel":
+                # A) Yüksek güven → pseudo-label olarak öğren
                 tam_kat = f"{ana_k}:{alt_k}" if alt_k else ana_k
                 ml_kategori.egit_tek(urun, tam_kat, kaynak="auto", hemen_egit=False)
+            elif guven < 0.55:
+                # B) Belirsiz → 'genel' kategoride gönder (kullanıcı tercihi)
+                #    Belirsiz tahminleri de kaydet, ileride manuel etiketleme için
+                ml_kategori.belirsiz_kaydet(urun, ana_k, guven)
+                kat = "genel"   # belirsizse genel kategori ile gönder
 
-            elif guven < 0.55 and llm.aktif_mi():
-                # B) ML belirsiz — Claude'a sor (otomatik öğretmen)
-                llm_kat = llm.kategori_sor(urun, baglam=blok[:300])
-                if llm_kat:
-                    llm_ana, llm_alt = llm_kat
-                    tam_kat = f"{llm_ana}:{llm_alt}" if llm_alt else llm_ana
-                    ml_kategori.egit_tek(urun, tam_kat, kaynak="llm", hemen_egit=False)
-                    # Mesaj için kategoriyi de güncelle — LLM otorite
-                    kat = llm_ana
-                else:
-                    # LLM cevap vermedi → belirsiz kuyruğa kaydet (sonra batch için)
-                    ml_kategori.belirsiz_kaydet(urun, ana_k, guven)
+            # C) Marka öğrenme: yüksek güvenli durumlarda yeni marka adayı tespit
+            try:
+                from utils import marka_ogrenme
+                if guven >= 0.7:
+                    marka_ogrenme.kaydet(urun, ana_k)
+            except Exception:
+                pass
+
     except Exception as e:
         from utils.log import log as _l
-        _l("UYARI", f"Otomatik öğrenme hatası: {e}")
+        _l("UYARI", f"Kendi kendine öğrenme hatası: {e}")
+
+    # ════════════════════════════════════════════════════════════
+    # TREND KAYDI (v18) — kategori bazlı popülerlik izleme
+    # ════════════════════════════════════════════════════════════
+    try:
+        from utils import trend
+        trend.paylasim_kaydet(kat, magaza, indirim)
+    except Exception:
+        pass
 
     return {
         "blok": blok, "indirim": indirim, "link": lnk,
         "magaza": magaza, "kat": kat, "skor": skor, "fs": fs,
-        "urun_llm": urun if not urun_adi_bul(blok) else None,
     }
 
 
