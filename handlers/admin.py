@@ -46,6 +46,7 @@ _YARDIM = (
     "/trend — Son 24h/7g trend raporu\n"
     "/segment — Kullanıcı tıklama analizi\n"
     "/anomali — Anomali tespit istatistikleri\n"
+    "/fiyat — Fiyat zekası kategori profilleri\n"
     "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
 )
@@ -181,6 +182,9 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/anomali":
             await _anomali_raporu(event)
+
+        elif komut == "/fiyat":
+            await _fiyat_raporu(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -746,6 +750,37 @@ async def _anomali_raporu(event) -> None:
         await event.reply("\n".join(satirlar), parse_mode="html")
     except Exception as e:
         await event.reply(f"❌ Anomali rapor hatası: {e}")
+
+
+async def _fiyat_raporu(event) -> None:
+    """Fiyat zekası raporu — kategori bazlı fiyat profilleri."""
+    try:
+        from utils import fiyat_zekasi
+        ist = fiyat_zekasi.istatistik()
+        profiller = fiyat_zekasi.tum_profiller()
+        satirlar = [
+            "💰 <b>Fiyat Zekası</b>",
+            "",
+            f"📊 İzlenen kategori: <b>{ist['kategori_sayisi']}</b>",
+            f"🔢 Toplam gözlem: <b>{ist['toplam_gozlem']}</b>",
+            "",
+            "<b>Kategori fiyat profilleri:</b>",
+        ]
+        # En çok örneği olan 12 kategori
+        profiller = [p for p in profiller if p.get("ornek", 0) >= 5]
+        profiller.sort(key=lambda x: -x.get("ornek", 0))
+        for p in profiller[:12]:
+            satirlar.append(
+                f"  • {p['kategori']:24} ort {p['ortalama']:.0f} TL "
+                f"(medyan {p['medyan']:.0f}, n={p['ornek']})"
+            )
+        if not profiller:
+            satirlar.append("  <i>(henüz yeterli veri yok — paylaşım yapıldıkça öğrenir)</i>")
+        satirlar.append("")
+        satirlar.append("<i>Her fırsat o kategorinin tipik fiyatına göre değerlendirilir.</i>")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Fiyat raporu hatası: {e}")
 
 
 async def _hosgeldin_pinle(event) -> None:

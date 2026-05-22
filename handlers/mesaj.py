@@ -71,18 +71,36 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
             log("FILTRE", f"  Mevcut buton linkleri ({len(btn_links)}): {btn_links}")
         return None
 
-    # ── Fiyat VEYA indirim sinyali zorunlu ──
-    from services.analiz import fiyat_bul
+    from services.analiz import fiyat_bul, urun_adi_bul
     _eski_fiyat, _yeni_fiyat, _, _ = fiyat_bul(blok)
-    if not _yeni_fiyat and indirim < config.MIN_INDIRIM:
-        log("FILTRE", f"Fiyat ve indirim yok → atlandı: '{onizleme}…'")
-        return None
-
-    from services.analiz import urun_adi_bul
     urun = urun_adi_bul(blok)
 
-    if indirim < config.MIN_INDIRIM:
-        log("FILTRE", f"İndirim %{indirim} < {config.MIN_INDIRIM} → atlandı: '{onizleme}…'")
+    # ── Reklam / duyuru filtresi ──
+    # İndirim oranı olmayan ürünleri de paylaşmak istiyoruz AMA
+    # kanal reklamı / duyuru / çekiliş mesajlarını DEĞİL.
+    try:
+        from utils import reklam
+        rek, rek_sebep = reklam.reklam_mi(
+            blok, link=lnk, urun_adi=urun or "",
+            fiyat_var=bool(_yeni_fiyat),
+        )
+        if rek:
+            log("FILTRE", f"Reklam/duyuru → atlandı: '{onizleme}…' ({rek_sebep})")
+            # Ürün tanıyıcıya negatif örnek olarak öğret (self-supervised)
+            try:
+                from utils import urun_taniyici
+                urun_taniyici.ogren_negatif(blok[:200])
+            except Exception:
+                pass
+            return None
+    except Exception:
+        pass
+
+    # ── Geçerlilik: somut ürün sinyali olmalı ──
+    # Fiyat VEYA indirim VEYA (ürün adı + mağaza linki) → geçer
+    # Hiçbiri yoksa → atla (zaten reklam filtresi çoğunu yakalar)
+    if not _yeni_fiyat and indirim < config.MIN_INDIRIM and not urun:
+        log("FILTRE", f"Ürün sinyali yetersiz → atlandı: '{onizleme}…'")
         return None
 
     if not urun:
@@ -157,16 +175,32 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
             except Exception:
                 pass
 
+            # D) Ürün tanıyıcıya pozitif örnek öğret (self-supervised)
+            try:
+                from utils import urun_taniyici
+                if guven >= 0.7:
+                    urun_taniyici.ogren_pozitif(urun)
+            except Exception:
+                pass
+
     except Exception as e:
         from utils.log import log as _l
         _l("UYARI", f"Kendi kendine öğrenme hatası: {e}")
 
     # ════════════════════════════════════════════════════════════
-    # TREND KAYDI (v18) — kategori bazlı popülerlik izleme
+    # FİYAT ZEKASI (v19) — kategori bazlı fiyat dağılımı öğren
     # ════════════════════════════════════════════════════════════
     try:
-        from utils import trend
-        trend.paylasim_kaydet(kat, magaza, indirim)
+        if _yeni_fiyat and kat != "genel":
+            from utils import fiyat_zekasi
+            from services.analiz import kategori_bul_tam
+            ana_fk, alt_fk, _ = kategori_bul_tam(blok)
+            fk = f"{ana_fk}:{alt_fk}" if alt_fk else ana_fk
+            fiyat_zekasi.kaydet(fk, _yeni_fiyat)
+            # Fırsat değeri varsa skoru zenginleştir
+            deger = fiyat_zekasi.firsat_degeri(fk, _yeni_fiyat)
+            if deger:
+                fs = fs + deger["bonus"] / 10.0   # bonus 0-15 → fs +0-1.5
     except Exception:
         pass
 
@@ -238,12 +272,18 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             except Exception as e:
                 log("UYARI", f"entities parse hatası: {e}")
 
-            # Tekrarları temizle, sırasını koru
+            # Tekrarları temizle (exact string), sırasını koru
             seen = set()
             btn_links = [x for x in btn_links if not (x in seen or seen.add(x))]
 
+            # ÜRÜN bazında grupla — aynı ürünün affiliate/ref farklı linkleri
+            # tek ürün sayılır; gerçekten farklı ürünler ayrı tutulur.
+            from services.analiz import urun_kimligine_gore_grupla
+            urun_linkleri = urun_kimligine_gore_grupla(btn_links)
+
             if btn_links:
-                log("BILGI", f"Mesajdan {len(btn_links)} link toplandı: {btn_links[0][:60]}…")
+                log("BILGI", f"Mesajdan {len(btn_links)} link toplandı, "
+                             f"{len(urun_linkleri)} benzersiz ürün: {btn_links[0][:60]}…")
 
             gorsel = (
                 event.message.media
@@ -264,12 +304,28 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             kanal_adi = getattr(getattr(event, "chat", None), "username", None) or "bilinmiyor"
 
             bloklar = mesaj_bolum_ayir(ham)
-            # Her bloğu analiz et, geçenleri topla
+
+            # Her bloğu analiz et. Bloklara linkleri akıllıca dağıt:
+            #  - Tek blok + çok ürün linki → linkler ürün başına ayrılır
+            #  - Çok blok → her blok metin içindeki/sıradaki linki alır
             adaylar = []
-            for b in bloklar:
+            for idx, b in enumerate(bloklar):
+                # Bu bloğa ait link adayları: önce blok metnindeki, sonra hepsi
                 sonuc = _blok_analiz(b, btn_links)
                 if sonuc:
                     adaylar.append(sonuc)
+
+            # Eğer metin tek blok verdi AMA birden fazla benzersiz ürün linki
+            # varsa, bu muhtemelen çoklu üründür — her ürün linkini ayrı aday yap.
+            if len(adaylar) == 1 and len(urun_linkleri) >= 2:
+                temel = adaylar[0]
+                adaylar = []
+                for ul in urun_linkleri[:5]:
+                    kopya = dict(temel)
+                    kopya["link"] = ul
+                    kopya["magaza"] = magaza_bul(temel["blok"], ul)
+                    adaylar.append(kopya)
+                log("BILGI", f"Tek blok ama {len(urun_linkleri)} ürün linki → {len(adaylar)} ayrı ürün")
 
             if not adaylar:
                 return
@@ -280,63 +336,55 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 return
             gorulmus_ekle(mid)
 
-            # Tek ürün
+            # ── Çoklu ürün (2-5) ──
+            adaylar.sort(key=lambda x: x["fs"], reverse=True)
+
+            # Aynı linke sahip adayları tekille (gerçekten aynı ürün)
+            benzersiz = []
+            gorulen_link = set()
+            for a in adaylar:
+                if a["link"] in gorulen_link:
+                    continue
+                gorulen_link.add(a["link"])
+                benzersiz.append(a)
+            adaylar = benzersiz
+
+            # Tek ürüne düştüyse tekli gönderim
             if len(adaylar) == 1:
                 a = adaylar[0]
                 if marka_spam_kontrol(a["magaza"]):
                     log("BILGI", f"{a['magaza']} spam limiti – atlandı")
                     return
-                sablon = sablon_olustur(a["blok"], a["indirim"], btn_links)
+                sablon = sablon_olustur(a["blok"], a["indirim"], [a["link"]])
                 if not sablon:
                     return
-                gunluk_ekle(a["blok"], a["indirim"], btn_links)
+                gunluk_ekle(a["blok"], a["indirim"], [a["link"]])
                 try:
                     kuyruk.put_nowait((
                         sablon, gorsel_bytes, [a["link"]],
                         a["magaza"], a["kat"], kanal_adi,
                         a["indirim"], a["fs"],
                     ))
-                    log("BILGI", f"Kuyruğa eklendi [{a['magaza']}] %{a['indirim']} | kuyruk={kuyruk.qsize()}")
-                except asyncio.QueueFull:
-                    log("UYARI", f"Kuyruk dolu, mesaj atıldı [{a['magaza']}]")
-                return
-
-            # Çoklu ürün — en kaliteli 2'sini al, tek mesaj/2 buton
-            adaylar.sort(key=lambda x: x["fs"], reverse=True)
-            a1, a2 = adaylar[0], adaylar[1]
-
-            # Aynı linkler tek ürünmüş gibi → sadece birini al
-            if a1["link"] == a2["link"] and a1["indirim"] == a2["indirim"]:
-                if marka_spam_kontrol(a1["magaza"]):
-                    return
-                sablon = sablon_olustur(a1["blok"], a1["indirim"], btn_links)
-                if not sablon:
-                    return
-                gunluk_ekle(a1["blok"], a1["indirim"], btn_links)
-                try:
-                    kuyruk.put_nowait((
-                        sablon, gorsel_bytes, [a1["link"]],
-                        a1["magaza"], a1["kat"], kanal_adi,
-                        a1["indirim"], a1["fs"],
-                    ))
-                    log("BILGI", f"Kuyruğa eklendi (tek) [{a1['magaza']}] %{a1['indirim']}")
+                    log("BILGI", f"Kuyruğa eklendi (tek) [{a['magaza']}] %{a['indirim']}")
                 except asyncio.QueueFull:
                     log("UYARI", "Kuyruk dolu")
                 return
 
+            # En kaliteli 2 ürün → tek mesaj, 2 buton
+            a1, a2 = adaylar[0], adaylar[1]
             if marka_spam_kontrol(a1["magaza"]):
                 return
 
             sablon = olustur_coklu(
                 a1["blok"], a1["indirim"], a1["link"],
                 a2["blok"], a2["indirim"], a2["link"],
-                btn_links=btn_links,
+                btn_links=[a1["link"], a2["link"]],
             )
             if not sablon:
                 return
 
-            gunluk_ekle(a1["blok"], a1["indirim"], btn_links)
-            gunluk_ekle(a2["blok"], a2["indirim"], btn_links)
+            gunluk_ekle(a1["blok"], a1["indirim"], [a1["link"]])
+            gunluk_ekle(a2["blok"], a2["indirim"], [a2["link"]])
 
             try:
                 kuyruk.put_nowait((
