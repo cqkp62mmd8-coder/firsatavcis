@@ -46,6 +46,19 @@ def _durum_json(kuyruk_size: int = 0) -> bytes:
         "kuyruk_size": kuyruk_size,
         "zaman": simdi_tr().strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+    # Model durumları (gözlemlenebilirlik — opsiyonel, hata olursa atla)
+    try:
+        from utils import urun_taniyici, ml_kategori
+        obj["modeller"] = {
+            "urun_taniyici": urun_taniyici.istatistik(),
+            "ml_kategori_egitim_bekliyor": ml_kategori.egitim_bekliyor_mu(),
+        }
+        from utils import gemini
+        obj["gemini"] = gemini.istatistik()
+    except Exception:
+        pass
+
     return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
 
 

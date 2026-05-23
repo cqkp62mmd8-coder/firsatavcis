@@ -151,17 +151,24 @@ def _ozel_etiket(metin: str) -> str | None:
 # ── Ürün bloğu (yeni minimalist) ────────────────────────────────
 
 def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | None = None,
-                onceden_lnk: str | None = None) -> list[str]:
+                onceden_lnk: str | None = None, gemini: dict | None = None) -> list[str]:
     # onceden_lnk: çoklu modda direkt link geçilirse magaza_bul daha doğru çalışır
+    # gemini: Gemini analiz sonucu — varsa ürün adı + akıllı tanıtım cümlesi kullanılır
     lnk          = onceden_lnk or link_bul(metin, btn_links)
     magaza       = magaza_bul(metin, lnk)
-    urun         = urun_adi_bul(metin)
+    # Ürün adı: Gemini'nin temiz çıkardığı ad öncelikli
+    if gemini and gemini.get("urun_adi"):
+        urun = gemini["urun_adi"]
+    else:
+        urun = urun_adi_bul(metin)
     eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
     tur          = indirim_turu(metin)
     kat, ikon, _ = kategori_bul(metin)
     etiket       = _ozel_etiket(metin)
     kupon        = kupon_bul(metin)
     min_sip      = min_siparis_bul(metin)
+    # Gemini akıllı tanıtım cümlesi (varsa)
+    tanitim      = (gemini or {}).get("tanitim", "")
 
     # Alt-kategori bilgisi (hiyerarşik) — şablon yazısı için
     try:
@@ -174,6 +181,13 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
         kat_yazi = config.KATEGORI_YAZI.get(kat, "Alışveriş")
 
     fs           = firsat_skoru(metin, indirim, btn_links)
+    # Gemini "mükemmel fırsat" (kalite 5) dediyse fırsat skorunu yükselt →
+    # başlıkta 💎 ELİT rozeti tetiklenir (minimal-şık vurgu, ekstra satır yok)
+    g_kalite     = (gemini or {}).get("kalite", 0)
+    if g_kalite >= 5:
+        fs = max(fs + 3.0, 8.0)   # kalite 5 → garanti ELİT rozet
+    elif g_kalite == 4:
+        fs += 1.5
     tasarruf     = _tasarruf_hesapla(eski_v, yeni_v)
 
     eski_s = _fiyat_format(eski_s) if eski_s else None
@@ -203,6 +217,9 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
             s.append(f"<b>{kat_yazi} fırsatı</b>")
         else:
             s.append(f"<b>İndirimli ürün</b>")
+        # Gemini akıllı tanıtım cümlesi (varsa) — ürün adının altında, şık
+        if tanitim:
+            s.append(f"<i>{tanitim}</i>")
         s.append("")
         # Fiyat: temiz, çift satır
         if eski_s and yeni_s:
@@ -227,7 +244,11 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     # Stok / uyarılar
     if stok_kritik_mi(metin):
         s.append("🚨 <b>Son stoklar</b>")
-    if sahte_indirim_mi(metin, indirim):
+    # Fiyat uyarısı: Gemini'nin akıllı değerlendirmesi öncelikli, yoksa saf-Python
+    g_fiyat_uyari = (gemini or {}).get("fiyat_uyari", "")
+    if g_fiyat_uyari:
+        s.append(f"⚠️ <i>{g_fiyat_uyari}</i>")
+    elif sahte_indirim_mi(metin, indirim):
         s.append("⚠️ <i>Bu oran alışılmışın dışında, araştırarak satın al</i>")
 
     # Kupon / min
@@ -241,13 +262,15 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
 
 # ── Tek ürün şablonu ────────────────────────────────────────────
 
-def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None) -> str | None:
+def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
+            gemini: dict | None = None) -> str | None:
     # NOT: indirim <= 0 olan ürünleri de paylaşıyoruz (fiyat odaklı başlık).
-    # Sadece negatif/yasak içerik reddedilir.
+    # gemini: Gemini analiz sonucu — varsa akıllı ürün adı + tanıtım kullanılır.
     if negatif_mi(metin):
         return None
-    # Ürün adı yoksa (slogan/CTA-only mesaj) — marka kampanyası değilse paylaşma
-    if not urun_adi_bul(metin) and indirim_turu(metin) != "marka":
+    # Ürün adı: Gemini varsa onu kullan (boş slogan kontrolü için)
+    _urun = (gemini or {}).get("urun_adi") or urun_adi_bul(metin)
+    if not _urun and indirim_turu(metin) != "marka":
         return None
     bl  = buton_linkleri or []
     lnk = link_bul(metin, bl)
@@ -269,7 +292,7 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None) -
     # Trend için mağazayı kayıt
     trend_kaydet(mag)
 
-    s = _urun_blogu(metin, indirim, bl)
+    s = _urun_blogu(metin, indirim, bl, gemini=gemini)
     s += ["", hashtag, f"@{kanal}"]
     return "\n".join(s)
 
