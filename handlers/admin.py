@@ -47,6 +47,8 @@ _YARDIM = (
     "/segment — Kullanıcı tıklama analizi\n"
     "/anomali — Anomali tespit istatistikleri\n"
     "/fiyat — Fiyat zekası kategori profilleri\n"
+    "/gemini — Yapay zeka (Gemini) durumu\n"
+    "/topluluk — Topluluk oyları & en çok oylananlar\n"
     "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
 )
@@ -86,11 +88,26 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
             bugun = simdi_tr().strftime("%Y-%m-%d")
             ikon = "⏸" if state.durduruldu else "✅"
             durum = "Duraklatıldı" if state.durduruldu else "Aktif"
+            # Yapay zeka durumu
+            ai_satir = ""
+            try:
+                from utils import gemini
+                g = gemini.istatistik()
+                if g["aktif"]:
+                    if g.get("dinlenmede"):
+                        ai_satir = "\n🤖 Yapay Zeka: 🟡 yedekte (kota/hata)"
+                    else:
+                        ai_satir = f"\n🤖 Yapay Zeka: 🟢 Gemini aktif ({g['basari']} analiz)"
+                else:
+                    ai_satir = "\n🤖 Yapay Zeka: ⚪ saf-Python (Gemini anahtarı yok)"
+            except Exception:
+                pass
             await event.reply(
                 f"{ikon} <b>Bot Durumu: {durum}</b>\n\n"
                 f"📅 Bugün: {ist.get('gunluk', {}).get(bugun, 0)} fırsat\n"
                 f"📈 Toplam: {ist.get('toplam', 0)} fırsat\n"
-                f"📬 Kuyruk: {kuyruk.qsize()} / {kuyruk.maxsize} mesaj",
+                f"📬 Kuyruk: {kuyruk.qsize()} / {kuyruk.maxsize} mesaj"
+                f"{ai_satir}",
                 parse_mode="html",
             )
 
@@ -185,6 +202,12 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/fiyat":
             await _fiyat_raporu(event)
+
+        elif komut == "/gemini":
+            await _gemini_raporu(event)
+
+        elif komut == "/topluluk":
+            await _topluluk_raporu(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -717,7 +740,8 @@ async def _scrape_test(event, url: str) -> None:
                 parse_mode="html"
             )
             return
-        bilgi = scraping.urun_bilgisi(url)
+        loop = asyncio.get_running_loop()
+        bilgi = await loop.run_in_executor(None, scraping.urun_bilgisi, url)
         if not bilgi:
             await event.reply("❌ Sayfa açılamadı veya meta veri yok.")
             return
@@ -750,6 +774,73 @@ async def _anomali_raporu(event) -> None:
         await event.reply("\n".join(satirlar), parse_mode="html")
     except Exception as e:
         await event.reply(f"❌ Anomali rapor hatası: {e}")
+
+
+async def _topluluk_raporu(event) -> None:
+    """Topluluk etkileşim raporu — en çok oylanan fırsatlar."""
+    try:
+        from utils import segment
+        ozet = segment.oy_ozeti(7)
+        en_cok = segment.en_cok_oylanan(7, 5)
+        satirlar = [
+            "\U0001F465 <b>Topluluk Etkileşimi</b> (son 7 gün)",
+            "",
+            f"\U0001F525 Toplam kaçmaz oyu: <b>{ozet['iyi']}</b>",
+            f"\u274C Toplam uyarı: <b>{ozet['sahte']}</b>",
+            f"\U0001F4CA Toplam oy: <b>{ozet['toplam']}</b>",
+        ]
+        if en_cok:
+            satirlar.append("")
+            satirlar.append("<b>En çok oylanan fırsatlar:</b>")
+            for i, m in enumerate(en_cok, 1):
+                satirlar.append(
+                    f"  {i}. Mesaj #{m['mesaj_id']}: "
+                    f"\U0001F525{m['iyi']} \u274C{m['sahte']} (net +{m['net']})"
+                )
+        else:
+            satirlar.append("")
+            satirlar.append("<i>Henüz oy yok — fırsatlar oylandıkça görünür.</i>")
+
+        # Beğenilen kategoriler (kategori bazlı topluluk ilgisi)
+        try:
+            kats = segment.begenilen_kategoriler(30, 5)
+            if kats:
+                satirlar.append("")
+                satirlar.append("<b>En beğenilen kategoriler (30 gün):</b>")
+                for k in kats:
+                    satirlar.append(f"  • {k['kategori']}: \U0001F525{k['iyi']} \u274C{k['sahte']}")
+        except Exception:
+            pass
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"\u274C Topluluk raporu hatası: {e}")
+
+
+async def _gemini_raporu(event) -> None:
+    """Gemini yapay zeka durum raporu."""
+    try:
+        from utils import gemini
+        ist = gemini.istatistik()
+        durum = "🟢 AKTİF" if ist["aktif"] else "🔴 DEVRE DIŞI (anahtar yok)"
+        if ist.get("dinlenmede"):
+            durum = "🟡 GEÇİCİ DİNLENMEDE (kota/hata — yedekte)"
+        satirlar = [
+            "🤖 <b>Gemini Yapay Zeka</b>",
+            "",
+            f"Durum: <b>{durum}</b>",
+            f"Model: <code>{ist['model']}</code>",
+            "",
+            f"📤 Toplam istek: {ist['istek']}",
+            f"✅ Başarılı: {ist['basari']}",
+            f"⚠️ Hata: {ist['hata']}",
+            f"💾 Cache: {ist['cache_boyut']} mesaj",
+            "",
+            "<i>Gemini aktifken mesajları gerçekten anlar (kalıp/örnek yok). "
+            "Kota dolsa/hata olsa bot otomatik saf-Python yedeğe döner.</i>",
+        ]
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"❌ Gemini rapor hatası: {e}")
 
 
 async def _fiyat_raporu(event) -> None:

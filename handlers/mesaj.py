@@ -43,9 +43,12 @@ def _kara_liste_eslesir(metin: str) -> bool:
     return False
 
 
-def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
+def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = None) -> dict | None:
     """Bir bloğu analiz edip dict döner; geçersizse None.
-    Kendi kendine yetinen sistem — harici API yok."""
+
+    gemini_sonuc verilmişse (Gemini ile gerçek anlama), ürün/reklam/kategori
+    kararlarında ÖNCELİKLE o kullanılır. Yoksa saf-Python yedek sistem.
+    """
     onizleme = blok[:50].replace("\n", " ")
 
     if _kara_liste_eslesir(blok):
@@ -73,28 +76,50 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
 
     from services.analiz import fiyat_bul, urun_adi_bul
     _eski_fiyat, _yeni_fiyat, _, _ = fiyat_bul(blok)
-    urun = urun_adi_bul(blok)
 
-    # ── Reklam / duyuru filtresi ──
-    # İndirim oranı olmayan ürünleri de paylaşmak istiyoruz AMA
-    # kanal reklamı / duyuru / çekiliş mesajlarını DEĞİL.
-    try:
-        from utils import reklam
-        rek, rek_sebep = reklam.reklam_mi(
-            blok, link=lnk, urun_adi=urun or "",
-            fiyat_var=bool(_yeni_fiyat),
-        )
-        if rek:
-            log("FILTRE", f"Reklam/duyuru → atlandı: '{onizleme}…' ({rek_sebep})")
-            # Ürün tanıyıcıya negatif örnek olarak öğret (self-supervised)
+    # ── ÜRÜN ADI: Gemini varsa onun anlayışı, yoksa saf-Python ──
+    if gemini_sonuc and gemini_sonuc.get("urun_adi"):
+        urun = gemini_sonuc["urun_adi"]
+    else:
+        urun = urun_adi_bul(blok)
+
+    # ── REKLAM KARARI: Gemini varsa onun anlayışı (gerçek anlama), yoksa yedek ──
+    if gemini_sonuc is not None:
+        if gemini_sonuc.get("reklam"):
+            log("FILTRE", f"Reklam (Gemini) → atlandı: '{onizleme}…'")
+            # Gemini'nin kararını yedek sisteme öğret (kota dolunca işe yarar)
             try:
                 from utils import urun_taniyici
                 urun_taniyici.ogren_negatif(blok[:200])
             except Exception:
                 pass
             return None
-    except Exception:
-        pass
+        # Gemini "ürün" dedi → reklam filtresini atla, devam et
+        # Gemini'nin onayladığı ürün adını yedek sisteme pozitif öğret
+        if gemini_sonuc.get("urun_adi"):
+            try:
+                from utils import urun_taniyici
+                urun_taniyici.ogren_pozitif(gemini_sonuc["urun_adi"])
+            except Exception:
+                pass
+    else:
+        # Yedek: saf-Python reklam tespiti
+        try:
+            from utils import reklam
+            rek, rek_sebep = reklam.reklam_mi(
+                blok, link=lnk, urun_adi=urun or "",
+                fiyat_var=bool(_yeni_fiyat),
+            )
+            if rek:
+                log("FILTRE", f"Reklam/duyuru → atlandı: '{onizleme}…' ({rek_sebep})")
+                try:
+                    from utils import urun_taniyici
+                    urun_taniyici.ogren_negatif(blok[:200])
+                except Exception:
+                    pass
+                return None
+        except Exception:
+            pass
 
     # ── Geçerlilik: somut ürün sinyali olmalı ──
     # Fiyat VEYA indirim VEYA (ürün adı + mağaza linki) → geçer
@@ -139,8 +164,21 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
         pass
 
     magaza = magaza_bul(blok, lnk)
-    kat, _, _ = kategori_bul(blok)
+    # Kategori: Gemini varsa onun anlayışı, yoksa saf-Python
+    if gemini_sonuc and gemini_sonuc.get("kategori") and gemini_sonuc["kategori"] != "genel":
+        kat = gemini_sonuc["kategori"]
+        # Alt kategori varsa "ana:alt" formatında birleştir
+        alt = gemini_sonuc.get("alt_kategori", "")
+        if alt:
+            kat = f"{kat}:{alt}"
+    else:
+        kat, _, _ = kategori_bul(blok)
     fs = firsat_skoru(blok, indirim, btn_links)
+    # Gemini kalite değerlendirmesi (1-5) → fırsat skorunu zenginleştir
+    if gemini_sonuc and gemini_sonuc.get("kalite", 0) >= 4:
+        fs += 1.5   # Gemini "mükemmel fırsat" dediyse öne çıkar
+    elif gemini_sonuc and gemini_sonuc.get("kalite", 0) == 3:
+        fs += 0.5
 
     # ════════════════════════════════════════════════════════════
     # KENDI KENDİNE ÖĞRENME (v18) — Claude bağımsız
@@ -206,6 +244,7 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
     return {
         "blok": blok, "indirim": indirim, "link": lnk,
         "magaza": magaza, "kat": kat, "skor": skor, "fs": fs,
+        "gemini": gemini_sonuc,
     }
 
 
@@ -310,12 +349,22 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             #  - Aksi halde → tüm linkler havuzdan
             adaylar = []
             blok_link_eslesir = len(bloklar) == len(urun_linkleri) and len(bloklar) >= 2
+
+            # Gemini ile gerçek anlama (varsa) — thread'de çağır, event loop bloklanmasın
+            async def _gemini_analiz(metin):
+                try:
+                    from utils import gemini
+                    if not gemini.kullanilabilir():
+                        return None
+                    loop = asyncio.get_running_loop()
+                    return await loop.run_in_executor(None, gemini.analiz_et, metin)
+                except Exception:
+                    return None
+
             for idx, b in enumerate(bloklar):
-                if blok_link_eslesir:
-                    # Bu bloğa SADECE kendi sıradaki ürün linkini ver
-                    sonuc = _blok_analiz(b, [urun_linkleri[idx]])
-                else:
-                    sonuc = _blok_analiz(b, btn_links)
+                g_sonuc = await _gemini_analiz(b)
+                linkler = [urun_linkleri[idx]] if blok_link_eslesir else btn_links
+                sonuc = _blok_analiz(b, linkler, gemini_sonuc=g_sonuc)
                 if sonuc:
                     adaylar.append(sonuc)
 
@@ -359,10 +408,10 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 if marka_spam_kontrol(a["magaza"]):
                     log("BILGI", f"{a['magaza']} spam limiti – atlandı")
                     return
-                sablon = sablon_olustur(a["blok"], a["indirim"], [a["link"]])
+                sablon = sablon_olustur(a["blok"], a["indirim"], [a["link"]], gemini=a.get("gemini"))
                 if not sablon:
                     return
-                gunluk_ekle(a["blok"], a["indirim"], [a["link"]])
+                gunluk_ekle(a["blok"], a["indirim"], [a["link"]], (a.get("gemini") or {}).get("kalite", 0))
                 try:
                     kuyruk.put_nowait((
                         sablon, gorsel_bytes, [a["link"]],
@@ -387,8 +436,8 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             if not sablon:
                 return
 
-            gunluk_ekle(a1["blok"], a1["indirim"], [a1["link"]])
-            gunluk_ekle(a2["blok"], a2["indirim"], [a2["link"]])
+            gunluk_ekle(a1["blok"], a1["indirim"], [a1["link"]], (a1.get("gemini") or {}).get("kalite", 0))
+            gunluk_ekle(a2["blok"], a2["indirim"], [a2["link"]], (a2.get("gemini") or {}).get("kalite", 0))
 
             try:
                 kuyruk.put_nowait((
