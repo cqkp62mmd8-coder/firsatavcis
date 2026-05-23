@@ -90,6 +90,27 @@ async def _gunluk_bakim() -> None:
 
 # ── Başlangıç doğrulaması ────────────────────────────────────────
 
+async def _model_egitim_dongusu() -> None:
+    """Ürün tanıyıcı self-supervised eğitimi — arka planda, event loop'u
+    bloklamadan. Her 5 dk kontrol eder; eğitim bekliyorsa thread'de yapar."""
+    import asyncio as _asyncio
+    from utils import urun_taniyici, ml_kategori
+    while True:
+        await _asyncio.sleep(300)   # 5 dk
+        try:
+            if urun_taniyici.egitim_gerekli_mi():
+                await urun_taniyici.arka_plan_egit()
+                log("OK", "Ürün tanıyıcı arka planda yeniden eğitildi")
+        except Exception as e:
+            log("UYARI", f"Ürün tanıyıcı eğitim: {e}")
+        try:
+            if ml_kategori.egitim_bekliyor_mu():
+                await ml_kategori.arka_plan_egit()
+                log("OK", "ML kategori arka planda yeniden eğitildi")
+        except Exception as e:
+            log("UYARI", f"ML kategori eğitim: {e}")
+
+
 def _config_dogrula() -> bool:
     """Tüm config değerlerini detaylı kontrol eder. Sorun varsa False döner."""
     hatalar = []
@@ -307,6 +328,7 @@ async def main() -> None:
                 "stok_takip":    lambda: stok_takip.kontrol_dongusu(tg.client),
                 "gunluk_yedek":  lambda: cache.gunluk_yedek(),
                 "gunluk_bakim":  lambda: _gunluk_bakim(),
+                "model_egitim":  lambda: _model_egitim_dongusu(),
                 "health":        lambda: health.baslat(kuyruk, port=_port),
             }
             _gorev_yeniden_baslat_sayilari: dict[str, int] = {}
