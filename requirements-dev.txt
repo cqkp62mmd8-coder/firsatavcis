@@ -1,3 +1,0 @@
-# Development dependencies (CI/CD ve testler için)
-pytest>=7.0
-pytest-cov>=4.0
