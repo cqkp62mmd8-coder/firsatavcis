@@ -76,3 +76,197 @@ class TestMarkaOgrenme:
         marka_ogrenme.kaydet("TekSeferMarka ürün", "giyim")
         # 1 kez görülen marka olmamalı (eşik 3)
         assert marka_ogrenme.marka_mi("TekSeferMarka") is None
+
+
+class TestReklamTespiti:
+    """İndirim olmayan gerçek ürünler geçer, reklamlar atılır."""
+
+    def test_gercek_urun_reklam_degil(self):
+        from utils import reklam
+        rek, _ = reklam.reklam_mi(
+            "iPhone 15 Pro Max 256GB 89.999 TL",
+            "https://trendyol.com/x-p-1", "iPhone 15 Pro Max", True)
+        assert rek is False
+
+    def test_kanal_daveti_reklam(self):
+        from utils import reklam
+        rek, _ = reklam.reklam_mi(
+            "Kanalımıza katıl en iyi fırsatlar burada abone ol", "", "", False)
+        assert rek is True
+
+    def test_cekilis_reklam(self):
+        from utils import reklam
+        rek, _ = reklam.reklam_mi(
+            "Çekilişe katıl iPhone kazan detaylar için takip et", "", "", False)
+        assert rek is True
+
+    def test_marka_kampanyasi_gecer(self):
+        from utils import reklam
+        rek, _ = reklam.reklam_mi(
+            "Adidas tüm ürünlerde %50 indirim",
+            "https://trendyol.com/adidas", "", False)
+        assert rek is False
+
+    def test_urun_sinyali_yok_reklam(self):
+        from utils import reklam
+        rek, _ = reklam.reklam_mi(
+            "Merhaba arkadaşlar bugün güzel fırsatlar var", "", "", False)
+        assert rek is True
+
+
+class TestUrunKimligi:
+    """Aynı ürünün farklı linkleri tek kimlik; farklı ürünler ayrı."""
+
+    def test_ayni_urun_farkli_tag(self):
+        from services.analiz import urun_kimligi
+        k1 = urun_kimligi("https://www.amazon.com.tr/dp/B0CQJSJQ1T?tag=aff1")
+        k2 = urun_kimligi("https://www.amazon.com.tr/dp/B0CQJSJQ1T?ref=xyz")
+        assert k1 == k2
+
+    def test_farkli_urunler_farkli_kimlik(self):
+        from services.analiz import urun_kimligi
+        k1 = urun_kimligi("https://www.trendyol.com/x-p-111")
+        k2 = urun_kimligi("https://www.trendyol.com/y-p-222")
+        assert k1 != k2
+
+    def test_gruplama_ayni_urun_tek(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        sonuc = urun_kimligine_gore_grupla([
+            "https://www.amazon.com.tr/dp/B0CQJSJQ1T?tag=aff1",
+            "https://www.amazon.com.tr/dp/B0CQJSJQ1T?ref=xyz",
+        ])
+        assert len(sonuc) == 1
+
+    def test_gruplama_iki_urun(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        sonuc = urun_kimligine_gore_grupla([
+            "https://www.trendyol.com/x-p-111",
+            "https://www.trendyol.com/y-p-222",
+        ])
+        assert len(sonuc) == 2
+
+
+class TestUrunAdiTemizleme:
+    """Kargo/üyelik takıları ürün adından çıkmalı."""
+
+    def test_ucretsiz_kargo_temizlenir(self):
+        from services.analiz import urun_adi_bul
+        ad = urun_adi_bul("iPhone 15 Pro Max 256GB 89.999 TL ücretsiz kargo")
+        assert ad is not None
+        assert "kargo" not in ad.lower()
+
+    def test_premium_uyelik_temizlenir(self):
+        from services.analiz import urun_adi_bul
+        ad = urun_adi_bul("Bosch Süpürge 4.999 TL premium üyelik")
+        assert ad is not None
+        assert "üyelik" not in ad.lower()
+
+
+class TestFiyatZekasi:
+    """Kategori bazlı fiyat değerlendirmesi."""
+
+    def test_ucuz_fiyat_yuksek_bonus(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/fz_pytest"
+        os.makedirs("/tmp/fz_pytest", exist_ok=True)
+        from utils import fiyat_zekasi
+        # Tutarlı fiyatlar öğret
+        for _ in range(20):
+            fiyat_zekasi.kaydet("test:kat", 50000)
+        # Çok ucuz fiyat
+        d = fiyat_zekasi.firsat_degeri("test:kat", 30000)
+        assert d is not None
+        assert d["bonus"] >= 10   # ucuz → yüksek bonus
+
+    def test_yetersiz_veri_none(self):
+        from utils import fiyat_zekasi
+        d = fiyat_zekasi.firsat_degeri("hic:yok", 1000)
+        assert d is None
+
+
+class TestUrunTaniyici:
+    """Öğrenen ürün adı tanıyıcı (regex listesi değil, ML model)."""
+
+    def test_gercek_urun_taninir(self):
+        from utils import urun_taniyici
+        assert urun_taniyici.urun_adi_cikar("iPhone 15 Pro Max 256GB 89999 TL") is not None
+        assert urun_taniyici.urun_adi_cikar("Çorap 89 TL") is not None
+
+    def test_bilinmeyen_marka_taninir(self):
+        from utils import urun_taniyici
+        # Hiçbir listede olmayan markalar yapısal olarak tanınmalı
+        assert urun_taniyici.urun_adi_cikar("Zucchi Marsilya Sabunu 5x180gr 99 TL") is not None
+        assert urun_taniyici.urun_adi_cikar("Vinature Doğal Sıvı Sabun 1.5L 49 TL") is not None
+
+    def test_slogan_elenir(self):
+        from utils import urun_taniyici
+        assert urun_taniyici.urun_adi_cikar("Stoklar ERİYOR hemen yakala 999 TL") is None
+        assert urun_taniyici.urun_adi_cikar("Süper fiyat şok indirim 500 TL") is None
+        assert urun_taniyici.urun_adi_cikar("Kanalımıza katıl abone ol takip et") is None
+
+    def test_kelime_skoru_dogru_yon(self):
+        from utils import urun_taniyici
+        # "iPhone" ürün, "hemen" filler — skorlar doğru yönde olmalı
+        urun_skor = urun_taniyici.kelime_urun_mu("Süpürge")
+        filler_skor = urun_taniyici.kelime_urun_mu("hemen")
+        assert urun_skor > filler_skor
+
+
+class TestReklamYapisalMantik:
+    """Reklam ayrımı kalıp listesiyle DEĞİL, yapısal mantıkla.
+    Hiç görülmemiş reklam türleri de yakalanmalı (somut ürün+fiyat yoksa reklam)."""
+
+    def test_gorulmemis_reklamlar_yakalanir(self):
+        from utils import reklam
+        # Bunların hiçbiri kalıp listesinde YOK — yapısal olarak elenmeli
+        gorulmemis = [
+            "Sürpriz seni bekliyor hemen gel",
+            "Join our community for the best deals",
+            "Yarınki büyük sürprize hazır mısın",
+            "Profilimdeki linke tıklamayı unutma",
+            "Bu akşam canlı yayındayız bekleriz",
+            "Anketimize katıl görüşünü bildir",
+            "100 TL bonus kazanmak için tıkla",
+        ]
+        for m in gorulmemis:
+            rek, _ = reklam.reklam_mi(m)
+            assert rek is True, f"Reklam kaçtı: {m}"
+
+    def test_somut_urunler_gecer(self):
+        from utils import reklam
+        urunler = [
+            ("iPhone 15 Pro Max 256GB 89999 TL", ""),
+            ("Çorap 89 TL", ""),
+            ("Zucchi Marsilya Sabunu 5x180gr 99 TL", ""),
+            ("Bosch Buzdolabı 18999 TL", "trendyol.com/x-p-1"),
+        ]
+        for m, link in urunler:
+            rek, _ = reklam.reklam_mi(m, link=link)
+            assert rek is False, f"Ürün reklam sanıldı: {m}"
+
+    def test_fiyatli_reklam_yakalanir(self):
+        from utils import reklam
+        # Fiyat içeren ama ürün SATMAYAN mesajlar (çekiliş/bonus/üyelik)
+        assert reklam.reklam_mi("Çekilişe katıl 1000 TL hediye kazan")[0] is True
+        assert reklam.reklam_mi("50 puan kazan davet et")[0] is True
+
+
+class TestCokluMarkaLinkEslestirme:
+    """Çoklu ürün mesajında her blok KENDİ linkini almalı.
+    Aksi halde link_bul hepsine aynı ilk linki verir → tek paylaşım bug'ı."""
+
+    def test_coklu_blok_ayri_link(self):
+        from services.analiz import mesaj_bolum_ayir, urun_kimligine_gore_grupla, link_bul
+        btn = ["https://trendyol.com/adidas-p-111", "https://trendyol.com/nike-p-222"]
+        ham = ("🔥 Adidas Samba Erkek Ayakkabı %40 indirim 2499 TL\n"
+               "🔥 Nike Air Force Beyaz %35 indirim 2999 TL")
+        bloklar = mesaj_bolum_ayir(ham)
+        urun_linkleri = urun_kimligine_gore_grupla(btn)
+        assert len(bloklar) == 2
+        assert len(urun_linkleri) == 2
+        # Eşleşme aktifken her blok kendi sıralı linkini almalı
+        l0 = link_bul(bloklar[0], [urun_linkleri[0]])
+        l1 = link_bul(bloklar[1], [urun_linkleri[1]])
+        assert l0 != l1, "İki blok aynı linki aldı — çoklu paylaşım bozulur"
+        assert "adidas" in l0
+        assert "nike" in l1

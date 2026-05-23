@@ -418,3 +418,29 @@ class TestBelirsizGenelKategori:
         # Bu test sadece tahmin akışının kırılmadığını doğrular.
         assert isinstance(ana, str)
         assert isinstance(guv, float)
+
+
+class TestKisaUrunAdi:
+    """Kısa ama gerçek ürün adları yakalanmalı, anlamsız filler atılmalı."""
+
+    def test_kisa_gercek_urun_gecer(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("Çorap 89 TL") == "Çorap"
+        assert urun_adi_bul("Lego 1.299 TL") == "Lego"
+        assert urun_adi_bul("Tişört %40 250 TL") == "Tişört"
+
+    def test_anlamsiz_filler_atilir(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("için 99 TL") is None
+        assert urun_adi_bul("Yeni 1000 TL") is None
+        assert urun_adi_bul("ürün 500 TL") is None
+
+    def test_slogan_atilir(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("Stoklar ERİYOR hemen yakala 999 TL") is None
+
+    def test_bilinmeyen_marka_gecer(self):
+        from services.analiz import urun_adi_bul
+        # Marka veritabanında olmayan ürünler de yapısal olarak yakalanmalı
+        assert urun_adi_bul("Zucchi Sabun 5x180gr 99 TL") is not None
+        assert urun_adi_bul("Vinature Doğal Sıvı Sabun 1.5L 49 TL") is not None
