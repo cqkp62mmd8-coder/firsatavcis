@@ -270,3 +270,149 @@ class TestCokluMarkaLinkEslestirme:
         assert l0 != l1, "İki blok aynı linki aldı — çoklu paylaşım bozulur"
         assert "adidas" in l0
         assert "nike" in l1
+
+
+class TestIsbirligiReklami:
+    """İşbirliği/sponsor/duyuru mesajları reklam — somut indirim öznesi yok."""
+
+    def test_isbirligi_reklam(self):
+        from utils import reklam
+        # "Hepsiburada işbirliği %50" — platform + işbirliği, satılık ürün yok
+        rek, _ = reklam.reklam_mi(
+            "Hepsiburada işbirliği %50 ye varan indirim Kupon FIRSATI",
+            link="hepsiburada.com")
+        assert rek is True
+
+    def test_gercek_marka_kampanyasi_gecer(self):
+        from utils import reklam
+        # "Adidas ürünlerinde %50" — indirimin öznesi var (marka)
+        rek, _ = reklam.reklam_mi("Adidas ürünlerinde %50 indirim", link="trendyol.com")
+        assert rek is False
+
+    def test_kupon_kodu_urun_degil(self):
+        from utils import urun_taniyici
+        urun_taniyici.ilk_kurulum()
+        # Tamamı büyük tek kelime = kupon kodu, ürün adı değil
+        assert urun_taniyici.urun_adi_cikar("Kupon FIRSATI %50") in (None, "")
+
+
+class TestGemini:
+    """Gemini anlama katmanı — anahtar yoksa sessizce yedeğe düşer."""
+
+    def test_anahtar_yoksa_devre_disi(self):
+        from utils import gemini
+        # Test ortamında anahtar yok → kullanılamaz, None döner
+        if not gemini.aktif:
+            assert gemini.kullanilabilir() is False
+            assert gemini.analiz_et("iPhone 15 Pro 89999 TL") is None
+
+    def test_istatistik_yapisi(self):
+        from utils import gemini
+        ist = gemini.istatistik()
+        assert "aktif" in ist
+        assert "model" in ist
+        assert "istek" in ist
+
+
+class TestSablonGemini:
+    """Şablon Gemini sonucuyla zenginleşir — akıllı ürün adı + tanıtım."""
+
+    def test_gemini_tanitim_cumlesi_eklenir(self):
+        from services.sablon import olustur
+        g = {"reklam": False, "urun_adi": "Bosch Buzdolabı No-Frost",
+             "kategori": "elektronik", "alt_kategori": "beyaz_esya",
+             "kalite": 4, "tanitim": "Geniş hacmi ve sessiz çalışmasıyla mutfağınızın yıldızı."}
+        s = olustur("Bosch Buzdolabı 18999 TL", 0,
+                    ["https://trendyol.com/x-p-1"], gemini=g)
+        assert s is not None
+        assert "Bosch Buzdolabı No-Frost" in s
+        assert "mutfağınızın yıldızı" in s
+
+    def test_gemini_temiz_urun_adi(self):
+        from services.sablon import olustur
+        # Gemini temiz ad verir — "yerine" gibi takılar olmaz
+        g = {"reklam": False, "urun_adi": "iPhone 15 Pro", "kategori": "elektronik",
+             "alt_kategori": "telefon", "kalite": 5, "tanitim": ""}
+        s = olustur("iPhone 15 Pro 89999 TL yerine 79999 TL", 11,
+                    ["https://trendyol.com/x-p-2"], gemini=g)
+        assert "iPhone 15 Pro" in s
+        assert "yerine" not in s
+
+
+class TestOylamaSistemi:
+    """Canlı oylama — çift oy engelleme + oy sayma."""
+
+    def test_cift_oy_engellenir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/oy_test"
+        os.makedirs("/tmp/oy_test", exist_ok=True)
+        from utils import segment
+        assert segment.tikla_kaydet(901, 7001, "good") is True
+        assert segment.tikla_kaydet(901, 7001, "good") is False  # aynı oy
+
+    def test_oy_degistirme(self):
+        from utils import segment
+        segment.tikla_kaydet(902, 7002, "good")
+        assert segment.tikla_kaydet(902, 7002, "fake") is True   # değişti
+        iyi, sahte = segment.oy_sayilari(7002)
+        assert iyi == 0 and sahte == 1
+
+    def test_oy_sayma(self):
+        from utils import segment
+        segment.tikla_kaydet(903, 7003, "good")
+        segment.tikla_kaydet(904, 7003, "good")
+        segment.tikla_kaydet(905, 7003, "fake")
+        iyi, sahte = segment.oy_sayilari(7003)
+        assert iyi == 2 and sahte == 1
+
+
+class TestSablonGeminiZengin:
+    """Gemini ile zenginleştirilmiş şablon — kalite rozeti + fiyat uyarısı."""
+
+    def test_kalite_5_elit_rozet(self):
+        from services.sablon import olustur
+        g = {"reklam": False, "urun_adi": "Dyson V15", "kategori": "elektronik",
+             "alt_kategori": "supurge", "kalite": 5, "tanitim": "", "fiyat_uyari": ""}
+        s = olustur("Dyson V15 18999 TL", 24, ["https://trendyol.com/x-p-1"], gemini=g)
+        assert "ELİT" in s   # kalite 5 → elit rozet
+
+    def test_gemini_fiyat_uyarisi(self):
+        from services.sablon import olustur
+        g = {"reklam": False, "urun_adi": "Powerbank", "kategori": "elektronik",
+             "alt_kategori": "aksesuar", "kalite": 2, "tanitim": "",
+             "fiyat_uyari": "Kapasite şüpheli."}
+        s = olustur("Powerbank 299 TL", 50, ["https://trendyol.com/x-p-2"], gemini=g)
+        assert "Kapasite şüpheli" in s
+
+
+class TestEnCokOylanan:
+    """Haftalık en çok oylanan fırsatlar."""
+
+    def test_en_cok_oylanan_siralama(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/eco_test"
+        os.makedirs("/tmp/eco_test", exist_ok=True)
+        from utils import segment
+        for u in range(5):
+            segment.tikla_kaydet(10000 + u, 9001, "good")
+        for u in range(2):
+            segment.tikla_kaydet(20000 + u, 9002, "good")
+        en_cok = segment.en_cok_oylanan(7, 5)
+        # 9001 (5 oy) 9002'den (2 oy) önce gelmeli
+        idx1 = next(i for i, m in enumerate(en_cok) if m["mesaj_id"] == 9001)
+        idx2 = next(i for i, m in enumerate(en_cok) if m["mesaj_id"] == 9002)
+        assert idx1 < idx2
+
+
+class TestGeminiKotaYonetimi:
+    """Kota dolunca (429) uzun dinlenme — gereksiz istek israfını önler."""
+
+    def test_kisa_metin_anahtar_yoksa_none(self):
+        from utils import gemini
+        if not gemini.aktif:
+            assert gemini.kisa_metin("Başlık yaz") is None
+
+    def test_istatistik_kota_alani(self):
+        from utils import gemini
+        ist = gemini.istatistik()
+        assert "kota_doldu" in ist
