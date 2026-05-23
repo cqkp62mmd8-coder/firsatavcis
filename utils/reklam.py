@@ -83,13 +83,20 @@ def reklam_mi(metin: str, link: str = "", urun_adi: str = "",
     if urun_sinyali and (fiyat_sinyali or indirim_sinyali):
         return False, "gerçek ürün (somut nesne + fiyat/indirim)"
 
-    # Marka kampanyası: ürün adı yok ama net indirim + mağaza var
-    # ("Adidas ürünlerinde %50", "Trendyol'da %40'a varan")
+    # Marka kampanyası: indirim + mağaza var AMA indirimin bir ÖZNESİ olmalı
+    # (bir marka/ürün kategorisi indirimde). Sadece "platform + işbirliği/kupon"
+    # ise bu bir satış değil, tanıtım/işbirliği duyurusu → reklam.
     if indirim_sinyali and magaza_sinyali:
-        return False, "marka kampanyası (indirim + mağaza)"
+        # Fiyat varsa gerçek kampanya kabul (somut değer)
+        if fiyat_sinyali:
+            return False, "marka kampanyası (indirim + fiyat + mağaza)"
+        # Fiyat yok: indirimin öznesi var mı? (ürün sinyali = somut nesne/marka)
+        if urun_sinyali:
+            return False, "marka kampanyası (indirimli ürün/marka + mağaza)"
+        # Fiyat yok + somut özne yok → işbirliği/duyuru reklamı
+        return True, "işbirliği/duyuru (indirim öznesi yok, sadece platform)"
 
     # Ürün adı var + mağaza linki var ama fiyat yok — sınırda ama paylaşılabilir
-    # (link gerçek bir ürüne gidiyor, fiyat sayfada)
     if urun_sinyali and magaza_sinyali:
         return False, "ürün + mağaza linki"
 

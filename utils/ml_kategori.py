@@ -48,6 +48,8 @@ _RETRAIN_ESIK = 30
 # ─── Global durum ──────────────────────────────────────────────
 _egitim_verisi: list[dict] = []
 _kirli_sayac: int = 0
+_egitim_bekliyor: bool = False   # arka plan görevi kontrol eder
+_OTO_MAX = 2000                  # en fazla otomatik (pseudo-label) örnek
 _son_egitim_zaman: float = 0.0
 _yuklendi: bool = False
 
@@ -748,19 +750,55 @@ def belirsiz_eslestir_ve_egit(satir_no: int, ana: str, alt: str = "") -> tuple[b
 
 def egit_tek(metin: str, kategori: str, kaynak: str = "manuel", hemen_egit: bool = True) -> None:
     """Tek bir örnek ekle, isteğe bağlı olarak hemen retrain."""
-    global _kirli_sayac
+    global _kirli_sayac, _egitim_verisi
     _egitim_verisi.append({
         "metin":    metin,
         "kategori": kategori,
         "kaynak":   kaynak,
         "eklendi":  simdi_tr().isoformat(),
     })
+    # Otomatik (pseudo-label) örnekleri sınırla — sınırsız büyümeyi önle.
+    # En fazla _OTO_MAX otomatik örnek tut (manuel/orijinal hep korunur).
+    if kaynak == "auto":
+        oto = [e for e in _egitim_verisi if e.get("kaynak") == "auto"]
+        if len(oto) > _OTO_MAX:
+            # En eski otomatik örnekleri at, diğer kaynakları koru
+            digerleri = [e for e in _egitim_verisi if e.get("kaynak") != "auto"]
+            _egitim_verisi = digerleri + oto[-_OTO_MAX:]
     _kirli_sayac += 1
-    if hemen_egit or _kirli_sayac >= _RETRAIN_ESIK:
+    if hemen_egit:
+        # Manuel komut (/egit) — anında eğit (admin bekliyor)
         _modeli_egit()
         _veri_kaydet()
         _model_kaydet()
         _kirli_sayac = 0
+    elif _kirli_sayac >= _RETRAIN_ESIK:
+        # Otomatik akış — event loop bloklanmasın, arka plana işaretle
+        global _egitim_bekliyor
+        _egitim_bekliyor = True
+
+
+def egitim_bekliyor_mu() -> bool:
+    """Arka plan görevi için: otomatik retrain bekliyor mu?"""
+    return _egitim_bekliyor
+
+
+async def arka_plan_egit() -> None:
+    """Eğitimi thread'de çalıştır — event loop bloklanmaz."""
+    global _egitim_bekliyor, _kirli_sayac
+    if not _egitim_bekliyor:
+        return
+    _egitim_bekliyor = False
+    import asyncio
+    loop = asyncio.get_running_loop()
+
+    def _isle():
+        _modeli_egit()
+        _veri_kaydet()
+        _model_kaydet()
+
+    await loop.run_in_executor(None, _isle)
+    _kirli_sayac = 0
 
 
 def egit_toplu(ornekler: list[tuple[str, str]], kaynak: str = "toplu") -> int:

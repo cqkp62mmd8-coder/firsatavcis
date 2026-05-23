@@ -109,6 +109,9 @@ _FILLER_TEK_KELIMELER = [
     # Kazanç/ödül kavramı — bunlar SATILAN değil KAZANILAN şeyler (reklam işareti)
     "bonus", "puan", "ödül", "hediye", "kazanç", "çekiliş", "davet",
     "kupon", "kod", "şans", "bilet", "kazanmak", "kazanma",
+    # İşbirliği/duyuru kavramı — satılan ürün değil, tanıtım (reklam işareti)
+    "işbirliği", "isbirligi", "sponsor", "sponsorlu", "reklam", "duyuru",
+    "varan", "varana", "kadar", "tüm", "seçili", "geçerli",
 ]
 _FILLER_SET = frozenset(_FILLER_TEK_KELIMELER)
 
@@ -371,10 +374,27 @@ def urun_adi_cikar(metin: str) -> Optional[str]:
 
     if en_iyi_ad and len(en_iyi_ad) >= 3:
         kelimeler = en_iyi_ad.split()
-        if len(kelimeler) == 1:
-            tek = kelimeler[0].replace("İ", "i").replace("I", "ı").lower()
-            if tek in _FILLER_SET:
-                return None
+        # Her kelimeyi normalize et
+        norm = [k.replace("İ", "i").replace("I", "ı").lower() for k in kelimeler]
+        # Tek kelime + filler → reddet
+        if len(kelimeler) == 1 and norm[0] in _FILLER_SET:
+            return None
+        # Tek kelime + tamamı büyük harf → kupon kodu (FIRSATI, INDIRIM50) → reddet
+        # Gerçek tek-kelime ürünler normal yazılır (Çorap, Lego), kupon kodları BÜYÜK
+        if len(kelimeler) == 1 and kelimeler[0].isupper() and len(kelimeler[0]) >= 4:
+            return None
+        # Tüm kelimeler filler VEYA mağaza adı ise → gerçek ürün değil
+        # (örn. "Hepsiburada işbirliği varan" → hepsi filler/mağaza)
+        try:
+            from utils.reklam import _MAGAZA_RE
+            anlamli = [
+                k for k in norm
+                if k not in _FILLER_SET and not _MAGAZA_RE.search(k)
+            ]
+            if not anlamli:
+                return None   # somut nesne yok, sadece mağaza+filler
+        except Exception:
+            pass
         return en_iyi_ad[:80]
     return None
 
@@ -387,28 +407,57 @@ _yeni_pozitif: list[str] = []
 _yeni_negatif: list[str] = []
 
 
+_egitim_gerekli = False   # arka plan görevi bunu kontrol eder
+
+
 def ogren_pozitif(urun_adi: str) -> None:
-    """Doğrulanmış bir ürün adını eğitime ekle (yüksek güvenli paylaşımlardan)."""
+    """Doğrulanmış ürün adını eğitime ekle. Eşik dolunca SADECE bayrak
+    kaldırır — gerçek eğitim arka plan görevinde (event loop bloklanmasın)."""
+    global _egitim_gerekli
     if urun_adi and len(urun_adi) >= 3:
         _yeni_pozitif.append(urun_adi)
         if len(_yeni_pozitif) >= 50:
-            yeniden_egit()
+            _egitim_gerekli = True
 
 
 def ogren_negatif(slogan: str) -> None:
     """Reklam/slogan olarak işaretlenmiş metni negatif örnek olarak ekle."""
+    global _egitim_gerekli
     if slogan and len(slogan) >= 5:
         _yeni_negatif.append(slogan)
+        if len(_yeni_negatif) >= 50:
+            _egitim_gerekli = True
+
+
+def egitim_gerekli_mi() -> bool:
+    """Arka plan görevi için: yeniden eğitim bekliyor mu?"""
+    return _egitim_gerekli
+
+
+async def arka_plan_egit() -> None:
+    """Eğitimi thread'de çalıştır — event loop bloklanmaz.
+    main.py'da periyodik görev olarak çağrılır."""
+    global _egitim_gerekli
+    if not _egitim_gerekli:
+        return
+    _egitim_gerekli = False
+    import asyncio
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, yeniden_egit)
 
 
 def yeniden_egit() -> None:
-    """Token + Satır modellerini yeni örneklerle yeniden eğit."""
+    """Token + Satır modellerini yeni örneklerle yeniden eğit (senkron)."""
+    global _yeni_pozitif, _yeni_negatif
     from utils.ml_dataset import EGITIM_VERISI
     pozitif = [m for m, _ in EGITIM_VERISI] + _yeni_pozitif
     negatif = list(_NEGATIF_CUMLELER) + _yeni_negatif
     _egit(pozitif, negatif)               # token modeli
     _satir_egit(pozitif, negatif)         # satır modeli (token sonrası)
     _kaydet()
+    # Bellek sızıntısını önle — son 500/200 örneği tut (model zaten öğrendi)
+    _yeni_pozitif = _yeni_pozitif[-500:]
+    _yeni_negatif = _yeni_negatif[-200:]
 
 
 # ── Disk ──
