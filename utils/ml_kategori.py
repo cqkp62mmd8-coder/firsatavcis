@@ -592,6 +592,26 @@ def tahmin_hiyerarsik(metin: str) -> tuple[str, str, float]:
     ana_kat = max(ana_olas, key=ana_olas.get)
     ana_guven = ana_olas[ana_kat]
 
+    # ── v18: ML belirsizse marka sözlüğünden destek al ──
+    # Eğer ML <0.55 güvende ise ve metin başında öğrenilmiş bir marka varsa,
+    # o markanın bilinen kategorisine yönlendir.
+    if ana_guven < 0.55:
+        try:
+            from utils import marka_ogrenme
+            # Metnin ilk birkaç kelimesini dene
+            kelimeler = metin.split()
+            for boyut in (2, 1):   # önce 2-kelimelik, sonra 1-kelimelik
+                if len(kelimeler) >= boyut:
+                    aday = " ".join(kelimeler[:boyut])
+                    marka_kat = marka_ogrenme.marka_mi(aday)
+                    if marka_kat:
+                        # Markanın bildiği kategoriyi kullan, güveni biraz yükselt
+                        ana_kat = marka_kat
+                        ana_guven = max(ana_guven, 0.60)
+                        break
+        except Exception:
+            pass
+
     # Aşama 2: Alt kategori (sadece bu ana kategoriye özel modelle)
     alt_kat = ""
     alt_guven = 1.0
@@ -678,7 +698,7 @@ def ana_kategori_olasiliklari(metin: str) -> dict[str, float]:
 
 def belirsizlik_skoru(metin: str) -> float:
     """Margin sampling — en iyi 2 olasılığın farkı.
-    Küçük margin = belirsiz = LLM'e sorulması faydalı.
+    Küçük margin = belirsiz → mesaj genel kategoriyle gönderilir.
     Döner: 0.0 (çok belirsiz) - 1.0 (çok güvenli)."""
     topk = tahmin_topk(metin, k=2)
     if len(topk) < 2:
