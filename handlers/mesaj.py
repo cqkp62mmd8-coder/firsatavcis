@@ -98,7 +98,6 @@ def _blok_analiz(blok: str, btn_links: list[str]) -> dict | None:
 
     # ── Geçerlilik: somut ürün sinyali olmalı ──
     # Fiyat VEYA indirim VEYA (ürün adı + mağaza linki) → geçer
-    # Hiçbiri yoksa → atla (zaten reklam filtresi çoğunu yakalar)
     if not _yeni_fiyat and indirim < config.MIN_INDIRIM and not urun:
         log("FILTRE", f"Ürün sinyali yetersiz → atlandı: '{onizleme}…'")
         return None
@@ -306,12 +305,17 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             bloklar = mesaj_bolum_ayir(ham)
 
             # Her bloğu analiz et. Bloklara linkleri akıllıca dağıt:
-            #  - Tek blok + çok ürün linki → linkler ürün başına ayrılır
-            #  - Çok blok → her blok metin içindeki/sıradaki linki alır
+            #  - Blok sayısı ile ürün linki sayısı eşitse → her blok kendi linkini alır
+            #    (yoksa link_bul hepsine aynı ilk linki verir → çoklu paylaşım bozulur)
+            #  - Aksi halde → tüm linkler havuzdan
             adaylar = []
+            blok_link_eslesir = len(bloklar) == len(urun_linkleri) and len(bloklar) >= 2
             for idx, b in enumerate(bloklar):
-                # Bu bloğa ait link adayları: önce blok metnindeki, sonra hepsi
-                sonuc = _blok_analiz(b, btn_links)
+                if blok_link_eslesir:
+                    # Bu bloğa SADECE kendi sıradaki ürün linkini ver
+                    sonuc = _blok_analiz(b, [urun_linkleri[idx]])
+                else:
+                    sonuc = _blok_analiz(b, btn_links)
                 if sonuc:
                     adaylar.append(sonuc)
 
