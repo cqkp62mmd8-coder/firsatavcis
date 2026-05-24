@@ -416,3 +416,39 @@ class TestGeminiKotaYonetimi:
         from utils import gemini
         ist = gemini.istatistik()
         assert "kota_doldu" in ist
+
+
+class TestAramaLinkiEleme:
+    """Arama motoru / karşılaştırma linkleri ürün sayılmamalı.
+    Aksi halde gerçek ürün linki yerine Google linki seçilip 'link yok' denir."""
+
+    def test_google_linki_elenir(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        linkler = [
+            "https://www.amazon.com.tr/dp/B08PDKKC28?tag=x",
+            "https://www.google.com/search?q=urun+akakce",
+        ]
+        urunler = urun_kimligine_gore_grupla(linkler)
+        assert len(urunler) == 1
+        assert "amazon" in urunler[0]
+        assert "google" not in urunler[0]
+
+    def test_link_bul_gercek_urunu_secer(self):
+        from services.analiz import link_bul
+        linkler = [
+            "https://www.google.com/search?q=Levis+akakce",
+            "https://www.amazon.com.tr/dp/B08PDKKC28?tag=x",
+        ]
+        sonuc = link_bul("Levis Trucker Jacket", linkler)
+        assert sonuc and "amazon" in sonuc
+
+    def test_akakce_cimri_elenir(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        linkler = [
+            "https://www.trendyol.com/x-p-123",
+            "https://www.akakce.com/urun",
+            "https://www.cimri.com/urun",
+        ]
+        urunler = urun_kimligine_gore_grupla(linkler)
+        assert len(urunler) == 1
+        assert "trendyol" in urunler[0]
