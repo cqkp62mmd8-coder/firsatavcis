@@ -82,6 +82,9 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
 
     if not lnk:
         log("FILTRE", f"Link yok → atlandı: '{onizleme}…'")
+        try:
+            from utils import saglik; saglik.kaydet("link_yok")
+        except Exception: pass
         if btn_links:
             log("FILTRE", f"  Mevcut buton linkleri ({len(btn_links)}): {btn_links}")
         return None
@@ -99,6 +102,9 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
     if gemini_sonuc is not None:
         if gemini_sonuc.get("reklam"):
             log("FILTRE", f"Reklam (Gemini) → atlandı: '{onizleme}…'")
+            try:
+                from utils import saglik; saglik.kaydet("reklam")
+            except Exception: pass
             # Gemini'nin kararını yedek sisteme öğret (kota dolunca işe yarar)
             try:
                 from utils import urun_taniyici
@@ -141,6 +147,9 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
 
     if not urun:
         log("FILTRE", f"Ürün adı çıkarılamadı → atlandı: '{onizleme}…'")
+        try:
+            from utils import saglik; saglik.kaydet("urun_adi_yok")
+        except Exception: pass
         return None
 
     skor = kalite_skoru(blok, indirim, btn_links)
@@ -360,7 +369,10 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             #    (yoksa link_bul hepsine aynı ilk linki verir → çoklu paylaşım bozulur)
             #  - Aksi halde → tüm linkler havuzdan
             adaylar = []
-            blok_link_eslesir = len(bloklar) == len(urun_linkleri) and len(bloklar) >= 2
+            # Akıllı eşleştirme: blok sayısı ile ürün linki sayısı eşitse birebir,
+            # DEĞİLSE ama yeterli ürün linki varsa yine sıralı eşle (fazla/alakasız
+            # buton link sayısını bozsa bile her bloğa kendi linkini ver).
+            blok_link_eslesir = len(bloklar) >= 2 and len(urun_linkleri) >= len(bloklar)
 
             # Gemini ile gerçek anlama (varsa) — thread'de çağır, event loop bloklanmasın
             async def _gemini_analiz(metin):
