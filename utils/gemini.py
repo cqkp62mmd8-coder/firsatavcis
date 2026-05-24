@@ -80,6 +80,9 @@ def _prompt(mesaj: str) -> str:
         "yoksa bir REKLAM/DUYURU mu (true)? Reklam örnekleri: kanala katıl, "
         "çekiliş, işbirliği, sponsor, bonus/puan kazan, takip et, davet et, "
         "üyelik tanıtımı. Satılık somut ürün yoksa true.\n"
+        "ÖNEMLİ: Mesajda somut bir ürün + fiyat/indirim varsa bu bir ÜRÜNDÜR "
+        "(reklam=false). 'Google'da Karşılaştır', 'fiyat karşılaştır', mağaza "
+        "linki gibi ifadeler ürünü reklam YAPMAZ — bunları yok say.\n"
         "2. urun_adi: Üründü ise ürünün TEMİZ adı (marka + model + önemli "
         "özellik). Slogan, fiyat, kargo, kupon, indirim ifadelerini KATMA. "
         "Reklamsa null.\n"
@@ -139,7 +142,18 @@ def _gemini_cagir(mesaj: str) -> Optional[dict]:
             .get("content", {})
             .get("parts", [{}])[0]
             .get("text", "")
-        )
+        ).strip()
+        # Gemini bazen ```json ... ``` ile sarar — temizle
+        if metin.startswith("```"):
+            metin = metin.lstrip("`")
+            if metin[:4].lower() == "json":
+                metin = metin[4:]
+            metin = metin.strip("`").strip()
+        # JSON gövdesini izole et (baştaki/sondaki gürültüyü at)
+        if "{" in metin and "}" in metin:
+            metin = metin[metin.index("{"): metin.rindex("}") + 1]
+        if not metin:
+            raise ValueError("boş Gemini yanıtı")
         sonuc = json.loads(metin)
         # Başarı — hata/kota sayaçlarını sıfırla
         _hata_say = 0
