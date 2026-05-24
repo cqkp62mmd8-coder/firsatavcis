@@ -819,7 +819,18 @@ async def _topluluk_raporu(event) -> None:
 async def _gemini_raporu(event) -> None:
     """Gemini yapay zeka durum raporu."""
     try:
-        from utils import gemini
+        try:
+            from utils import gemini
+        except ImportError:
+            await event.reply(
+                "⚠️ <b>Gemini modülü bulunamadı</b>\n\n"
+                "Çalışan sürümde <code>utils/gemini.py</code> yok. "
+                "Muhtemelen eski bir sürüm deploy edilmiş.\n\n"
+                "Çözüm: en son sürümü GitHub'a yükleyip Railway'de "
+                "'Deploy latest commit' yapın.",
+                parse_mode="html",
+            )
+            return
         ist = gemini.istatistik()
         durum = "🟢 AKTİF" if ist["aktif"] else "🔴 DEVRE DIŞI (anahtar yok)"
         if ist.get("dinlenmede"):

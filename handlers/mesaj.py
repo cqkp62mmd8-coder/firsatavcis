@@ -18,7 +18,19 @@ from services.analiz import (
     mesaj_bolum_ayir,
 )
 from services.sablon import olustur as sablon_olustur, olustur_coklu
-from schedulers.gunluk import ekle as gunluk_ekle
+from schedulers.gunluk import ekle as _gunluk_ekle_ham
+
+
+def gunluk_ekle(metin, indirim, linkler, gemini_kalite=0):
+    """Geriye dönük uyumlu sarmalayıcı: schedulers.gunluk.ekle eski sürümse
+    (4. parametreyi kabul etmiyorsa) 3 argümanla çağırır — karışık deploy'da çökmez."""
+    try:
+        _gunluk_ekle_ham(metin, indirim, linkler, gemini_kalite)
+    except TypeError:
+        try:
+            _gunluk_ekle_ham(metin, indirim, linkler)
+        except Exception:
+            pass
 from utils.cache import gorulmus_var_mi, gorulmus_ekle
 from utils.log import log
 
