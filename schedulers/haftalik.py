@@ -31,7 +31,25 @@ async def gonder(client: TelegramClient) -> None:
         f"Bu hafta <b>{haftalik} fırsat</b> paylaştık!", "",
         f"🏆 En popüler kategori: <b>{config.KATEGORI_YAZI.get(en_kat, en_kat)}</b>",
         f"🏪 En çok paylaşılan: <b>{en_mag}</b>",
-        f"📈 Toplam: <b>{ist.get('toplam', 0)} fırsat</b>", "",
+        f"📈 Toplam: <b>{ist.get('toplam', 0)} fırsat</b>",
+    ]
+
+    # Topluluk oyları (yeni — kullanıcı etkileşimi)
+    try:
+        from utils import segment
+        ozet = segment.oy_ozeti(7)
+        if ozet["toplam"] > 0:
+            satirlar += [
+                "",
+                "👥 <b>Topluluk Etkileşimi</b>",
+                f"🔥 {ozet['iyi']} kaçmaz oyu  •  ❌ {ozet['sahte']} uyarı",
+                f"Bu hafta <b>{ozet['toplam']}</b> oy kullanıldı — teşekkürler!",
+            ]
+    except Exception:
+        pass
+
+    satirlar += [
+        "",
         "Bildirimleri açık tutun! 🔔", "",
         "#HaftalıkRapor #FırsatPulsu",
         f"📢 @{kanal}",

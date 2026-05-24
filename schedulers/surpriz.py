@@ -26,6 +26,23 @@ async def gonder(client: TelegramClient) -> None:
 
     satirlar = ["🎰 <b>GÜNLÜK SÜRPRİZ FIRSAT!</b>", "", "Her gün bir sürpriz fırsat — bugünkü sürpriz:", ""]
     satirlar.append(f"{ikon} <b>{u['urun'][:60]}</b>")
+
+    # Gemini varsa sürprizi tanıtan kısa, çekici cümle ekle
+    try:
+        from utils import gemini
+        if gemini.kullanilabilir() and u.get("urun"):
+            loop = asyncio.get_running_loop()
+            talimat = (
+                f"'{u['urun'][:60]}' ürünü için bir 'günlük sürpriz fırsat' "
+                "tanıtım cümlesi yaz. Tek cümle, en fazla 12 kelime, "
+                "merak uyandıran ama abartısız. Sadece cümleyi yaz."
+            )
+            cumle = await loop.run_in_executor(None, gemini.kisa_metin, talimat, 40)
+            if cumle and len(cumle) <= 130:
+                satirlar.append(f"<i>{cumle}</i>")
+    except Exception:
+        pass
+
     satirlar.append("")
     if u["eski"] and u["yeni"]:
         satirlar += [f"🏷️ Normal:    <s>{u['eski']} TL</s>", f"💰 İndirimli: <b>{u['yeni']} TL</b>", ""]

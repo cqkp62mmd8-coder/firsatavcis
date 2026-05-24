@@ -19,9 +19,17 @@ from utils.log import log, simdi_tr
 _urunler: list[dict] = []
 
 
-def ekle(metin: str, indirim: int, buton_linkleri: list[str]) -> None:
+def ekle(metin: str, indirim: int, buton_linkleri: list[str],
+         gemini_kalite: int = 0) -> None:
     lnk = link_bul(metin, buton_linkleri)
     e, y, _, _ = fiyat_bul(metin)
+    skor = firsat_skoru(metin, indirim, buton_linkleri)
+    # Gemini kalite puanı (1-5) varsa skoru zenginleştir — günün en iyisi
+    # hem yüksek skorlu hem Gemini'nin "kaliteli fırsat" dediği olsun.
+    if gemini_kalite >= 4:
+        skor += 3.0
+    elif gemini_kalite == 3:
+        skor += 1.0
     _urunler.append({
         "metin":   metin,
         "indirim": indirim,
@@ -30,7 +38,8 @@ def ekle(metin: str, indirim: int, buton_linkleri: list[str]) -> None:
         "magaza":  magaza_bul(metin, lnk),
         "eski":    e,
         "yeni":    y,
-        "skor":    firsat_skoru(metin, indirim, buton_linkleri),
+        "skor":    skor,
+        "kalite":  gemini_kalite,
     })
     _urunler.sort(key=lambda x: (x["skor"], x["indirim"]), reverse=True)
     del _urunler[20:]
@@ -47,11 +56,30 @@ async def gonder(client: TelegramClient) -> None:
     en_iyi = _urunler[:3]
     log("BILGI", f"21:00 – {len(en_iyi)} ürün gönderiliyor")
 
+    # Başlık: Gemini varsa o günün ürünlerine göre taze/çekici bir alt başlık
+    alt_baslik = "Bugün yakalanan en yüksek skorlu ürünler:"
+    try:
+        from utils import gemini
+        if gemini.kullanilabilir():
+            urun_listesi = ", ".join(u.get("urun", "") for u in en_iyi if u.get("urun"))
+            if urun_listesi:
+                loop = asyncio.get_running_loop()
+                talimat = (
+                    "Bir Türkçe fırsat kanalı için 'günün en iyi fırsatları' "
+                    "duyurusunun alt başlığını yaz. Tek cümle, en fazla 10 kelime, "
+                    "heyecan verici ama abartısız. Bugünün ürünleri: "
+                    f"{urun_listesi}. Sadece cümleyi yaz, tırnak/emoji ekleme."
+                )
+                uretilen = await loop.run_in_executor(None, gemini.kisa_metin, talimat, 40)
+                if uretilen and len(uretilen) <= 120:
+                    alt_baslik = uretilen
+    except Exception:
+        pass
+
     try:
         await client.send_message(
             config.HEDEF_KANAL,
-            "🏆 <b>GÜNÜN EN İYİ FIRSATLARI</b> 🏆\n\n"
-            "Bugün yakalanan en yüksek skorlu ürünler:",
+            f"🏆 <b>GÜNÜN EN İYİ FIRSATLARI</b> 🏆\n\n{alt_baslik}",
             parse_mode="html",
         )
         await asyncio.sleep(3)
