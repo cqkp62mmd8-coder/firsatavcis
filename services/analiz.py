@@ -655,7 +655,6 @@ def urun_kimligi(url: str) -> str:
 def urun_kimligine_gore_grupla(linkler: list[str]) -> list[str]:
     """Bir link listesini ürün kimliğine göre grupla.
     Her benzersiz ürün için TEK temsilci link döner (öncelikli olanı).
-    Arama motoru / fiyat karşılaştırma linkleri ürün DEĞİLDİR — elenir.
 
     Örnek:
       ['amazon.com.tr/dp/X?tag=a', 'amazon.com.tr/dp/X?ref=b', 'trendyol.com/y-p-2']
@@ -663,14 +662,8 @@ def urun_kimligine_gore_grupla(linkler: list[str]) -> list[str]:
     """
     if not linkler:
         return []
-    # Arama/karşılaştırma/sosyal linkler ürün linki sayılmaz
-    _eleme = ("google.com/search", "bing.com/search", "duckduckgo.com",
-              "akakce.com", "cimri.com", "epey.com", "t.me/", "/search?")
     gorulen: dict[str, str] = {}   # kimlik → temsilci link
     for lnk in linkler:
-        ll = (lnk or "").lower()
-        if any(e in ll for e in _eleme):
-            continue   # arama/karşılaştırma linki — atla
         kimlik = urun_kimligi(lnk)
         if kimlik and kimlik not in gorulen:
             gorulen[kimlik] = link_temizle(lnk)
@@ -698,8 +691,7 @@ def link_bul(metin: str, buton_linkleri: list[str] | None = None) -> str | None:
         "aliexpress.com", "sl.n11.com", "hb.biz", "amzn.to",
     ]
     # Reddedilecekler — arama motorları + Telegram
-    gizli = ("google.com/search", "bing.com/search", "duckduckgo.com", "t.me/",
-             "akakce.com", "cimri.com", "epey.com", "/search?")
+    gizli = ("google.com/search", "bing.com/search", "duckduckgo.com", "t.me/")
 
     def _kabul(url: str) -> bool:
         ul = url.lower()
