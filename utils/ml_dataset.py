@@ -3324,6 +3324,98 @@ EGITIM_VERISI: list[tuple[str, str]] = [
     ('Garmin Forerunner koşu saati', 'elektronik:saat'),
     ('Huawei Watch GT 5', 'elektronik:saat'),
     ('Xiaomi Mi Band 9 akıllı bileklik', 'elektronik:saat'),
+
+    # ═══ TAKVİYE VERİLERİ (denge için az örnekli kategoriler) ═══
+    # --- bebek:oyuncak takviye ---
+    ('Fisher Price aktivite jimnastiği bebek', 'bebek:oyuncak'),
+    ('Chicco müzikli dönence bebek oyuncağı', 'bebek:oyuncak'),
+    ('Sophie la Girafe diş kaşıyıcı', 'bebek:oyuncak'),
+    ('Bright Starts oyun matı bebek', 'bebek:oyuncak'),
+    ('Pippo eğitici emekleme oyuncağı', 'bebek:oyuncak'),
+    ('Vtech bebek aktivite küpü', 'bebek:oyuncak'),
+    ('Pisi peluş uyku arkadaşı bebek', 'bebek:oyuncak'),
+    # --- bebek:koltuk takviye ---
+    ('Maxi-Cosi Pebble bebek oto koltuğu', 'bebek:koltuk'),
+    ('Britax Römer oto güvenlik koltuğu', 'bebek:koltuk'),
+    ('Chicco oto koltuğu 0-13 kg', 'bebek:koltuk'),
+    ('Cybex Sirona oto koltuğu 360 derece', 'bebek:koltuk'),
+    ('Joie Spin oto koltuğu isofix', 'bebek:koltuk'),
+    # --- bebek:puset takviye ---
+    ('Chicco bebek arabası travel sistem', 'bebek:puset'),
+    ('Baby Jogger City Mini bebek arabası', 'bebek:puset'),
+    ('Cybex Mios çift yönlü puset', 'bebek:puset'),
+    ('Maxi-Cosi katlanır bebek arabası', 'bebek:puset'),
+    ('Bugaboo Bee puset bebek arabası', 'bebek:puset'),
+    # --- otomotiv:aku takviye ---
+    ('Bosch S4 60 Ah akü', 'otomotiv:aku'),
+    ('Varta Blue Dynamic 72 Ah akü', 'otomotiv:aku'),
+    ('Mutlu SFB 55 Ah marş aküsü', 'otomotiv:aku'),
+    ('İnci Akü 70 Ah araç aküsü', 'otomotiv:aku'),
+    ('Yiğit Akü 100 Ah ticari araç', 'otomotiv:aku'),
+    # --- otomotiv:aksesuar takviye ---
+    ('Michelin araç içi telefon tutucu', 'otomotiv:aksesuar'),
+    ('Baseus manyetik telefon tutucu araç', 'otomotiv:aksesuar'),
+    ('araç içi USB hızlı şarj adaptörü', 'otomotiv:aksesuar'),
+    ('koltuk kılıfı set deri araç', 'otomotiv:aksesuar'),
+    ('araç paspas seti 4 parça', 'otomotiv:aksesuar'),
+    ('oto koku ağaç vanilya', 'otomotiv:aksesuar'),
+    # --- otomotiv:bakim takviye ---
+    ('Sonax oto şampuanı cila', 'otomotiv:bakim'),
+    ('Turtle Wax araç pasta cila seti', 'otomotiv:bakim'),
+    ('cam suyu antifrizli oto', 'otomotiv:bakim'),
+    ('oto iç temizlik spreyi torpido', 'otomotiv:bakim'),
+    ('jant temizleyici sprey araç', 'otomotiv:bakim'),
+    # --- spor:kayak takviye ---
+    ('Salomon kayak botu erkek', 'spor:kayak'),
+    ('Atomic kayak takımı set', 'spor:kayak'),
+    ('Rossignol snowboard tahtası', 'spor:kayak'),
+    ('kayak gözlüğü antifog UV', 'spor:kayak'),
+    ('Burton snowboard botu', 'spor:kayak'),
+    ('kayak eldiveni su geçirmez', 'spor:kayak'),
+    # --- spor:su_sporu takviye ---
+    ('Speedo yüzücü gözlüğü antifog', 'spor:su_sporu'),
+    ('Arena yüzme bonesi silikon', 'spor:su_sporu'),
+    ('dalış maskesi şnorkel set', 'spor:su_sporu'),
+    ('yüzme paleti eğitim', 'spor:su_sporu'),
+    ('can yeleği şişme deniz', 'spor:su_sporu'),
+    ('stand up paddle board şişme sup', 'spor:su_sporu'),
+    # --- giyim:aksesuar takviye ---
+    ('Fossil deri erkek kemer', 'giyim:aksesuar'),
+    ('Guess kadın güneş gözlüğü', 'giyim:aksesuar'),
+    ('Tommy Hilfiger atkı bere set', 'giyim:aksesuar'),
+    ('deri cüzdan erkek kartlık', 'giyim:aksesuar'),
+    ('kadın şal ipek desenli', 'giyim:aksesuar'),
+    ('şapka kep unisex pamuklu', 'giyim:aksesuar'),
+    ('kravat takım ipek erkek', 'giyim:aksesuar'),
+    # --- oyun:oyuncak takviye ---
+    ('Barbie Dreamhouse oyun evi', 'oyun:oyuncak'),
+    ('Hot Wheels yarış pisti set', 'oyun:oyuncak'),
+    ('Play-Doh oyun hamuru 10 renk', 'oyun:oyuncak'),
+    ('Nerf dart tabancası blaster', 'oyun:oyuncak'),
+    ('puzzle 1000 parça manzara', 'oyun:oyuncak'),
+    ('uzaktan kumandalı araba şarjlı', 'oyun:oyuncak'),
+    ('ahşap eğitici zeka oyunu', 'oyun:oyuncak'),
+    # --- ev:banyo takviye ---
+    ('banyo havlu seti 4 parça pamuk', 'ev:banyo'),
+    ('duş başlığı yağmurlama krom', 'ev:banyo'),
+    ('banyo paspası kaymaz mikrofiber', 'ev:banyo'),
+    ('diş fırçalık banyo seti', 'ev:banyo'),
+    ('duşakabin raf paslanmaz', 'ev:banyo'),
+    # --- ev:bahce takviye ---
+    ('bahçe sulama hortumu 20 metre', 'ev:bahce'),
+    ('çim biçme makinesi elektrikli', 'ev:bahce'),
+    ('saksı set seramik 3 lü', 'ev:bahce'),
+    ('bahçe mobilyası rattan set', 'ev:bahce'),
+    ('budama makası bahçe', 'ev:bahce'),
+    ('güneş enerjili bahçe lambası set', 'ev:bahce'),
+    # --- market:evcil takviye ---
+    ('Royal Canin kedi maması 4 kg', 'market:evcil'),
+    ('Pro Plan köpek maması kuzulu', 'market:evcil'),
+    ('kedi kumu bentonit topaklaşan', 'market:evcil'),
+    ('Whiskas yaş kedi maması 12 li', 'market:evcil'),
+    ('köpek tasması gezdirme seti', 'market:evcil'),
+    ('kedi tırmalama tahtası', 'market:evcil'),
+    ('akvaryum balık yemi pul', 'market:evcil'),
 ]
 
 # Bilgi: toplam örnek sayısı

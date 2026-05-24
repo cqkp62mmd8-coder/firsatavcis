@@ -97,11 +97,14 @@ def _prompt(mesaj: str) -> str:
         "ürünün gerçek bir faydasını/özelliğini vurgula. Reklamsa ''.\n"
         "7. fiyat_uyari: Eğer indirim/fiyat ŞÜPHELİ görünüyorsa (ör. gerçekçi "
         "olmayan %90 indirim, şişirilmiş eski fiyat) kısa bir uyarı yaz, "
-        "yoksa ''. Çoğu üründe '' olmalı.\n\n"
+        "yoksa ''. Çoğu üründe '' olmalı.\n"
+        "8. fiyat: Ürünün GÜNCEL/İNDİRİMLİ satış fiyatı (sadece sayı, TL, "
+        "nokta/virgül olmadan tam sayı). Yoksa 0.\n"
+        "9. eski_fiyat: Varsa indirimden ÖNCEKİ fiyat (sadece sayı). Yoksa 0.\n\n"
         "SADECE şu JSON formatında cevap ver, başka hiçbir şey yazma:\n"
         '{"reklam": true/false, "urun_adi": "..." veya null, '
         '"kategori": "...", "alt_kategori": "...", "kalite": 0-5, '
-        '"tanitim": "...", "fiyat_uyari": "..."}\n\n'
+        '"tanitim": "...", "fiyat_uyari": "...", "fiyat": 0, "eski_fiyat": 0}\n\n'
         f"Mesaj:\n{mesaj[:1000]}"
     )
 
@@ -163,6 +166,11 @@ def _gemini_cagir(mesaj: str) -> Optional[dict]:
             kalite = int(sonuc.get("kalite", 0))
         except (ValueError, TypeError):
             kalite = 0
+        def _sayi(v):
+            try:
+                return int(float(str(v).replace(".", "").replace(",", "")))
+            except (ValueError, TypeError):
+                return 0
         return {
             "reklam":        bool(sonuc.get("reklam", False)),
             "urun_adi":      (sonuc.get("urun_adi") or None),
@@ -171,6 +179,8 @@ def _gemini_cagir(mesaj: str) -> Optional[dict]:
             "kalite":        max(0, min(5, kalite)),
             "tanitim":       (sonuc.get("tanitim") or "").strip(),
             "fiyat_uyari":   (sonuc.get("fiyat_uyari") or "").strip(),
+            "fiyat":         _sayi(sonuc.get("fiyat", 0)),
+            "eski_fiyat":    _sayi(sonuc.get("eski_fiyat", 0)),
         }
     except urllib.error.HTTPError as e:
         _hata_say += 1
