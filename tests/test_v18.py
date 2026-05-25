@@ -416,3 +416,102 @@ class TestGeminiKotaYonetimi:
         from utils import gemini
         ist = gemini.istatistik()
         assert "kota_doldu" in ist
+
+
+class TestAramaLinkiEleme:
+    """Arama motoru / karşılaştırma linkleri ürün sayılmamalı.
+    Aksi halde gerçek ürün linki yerine Google linki seçilip 'link yok' denir."""
+
+    def test_google_linki_elenir(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        linkler = [
+            "https://www.amazon.com.tr/dp/B08PDKKC28?tag=x",
+            "https://www.google.com/search?q=urun+akakce",
+        ]
+        urunler = urun_kimligine_gore_grupla(linkler)
+        assert len(urunler) == 1
+        assert "amazon" in urunler[0]
+        assert "google" not in urunler[0]
+
+    def test_link_bul_gercek_urunu_secer(self):
+        from services.analiz import link_bul
+        linkler = [
+            "https://www.google.com/search?q=Levis+akakce",
+            "https://www.amazon.com.tr/dp/B08PDKKC28?tag=x",
+        ]
+        sonuc = link_bul("Levis Trucker Jacket", linkler)
+        assert sonuc and "amazon" in sonuc
+
+    def test_akakce_cimri_elenir(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        linkler = [
+            "https://www.trendyol.com/x-p-123",
+            "https://www.akakce.com/urun",
+            "https://www.cimri.com/urun",
+        ]
+        urunler = urun_kimligine_gore_grupla(linkler)
+        assert len(urunler) == 1
+        assert "trendyol" in urunler[0]
+
+
+class TestFiyatCopReddi:
+    """Fiyat/rakam çöpü ürün adı sayılmamalı (ürün adsız paylaşım önlenir)."""
+
+    def test_fiyat_satiri_urun_degil(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("490 04 İndirim İndirimli") is None
+        assert urun_adi_bul(
+            "Normal Fiyat: ₺2.490,04 İndirim: -%49 İndirimli Fiyat: ₺1.249,50"
+        ) is None
+
+    def test_gercek_urun_gecer(self):
+        from services.analiz import urun_adi_bul
+        assert urun_adi_bul("iPhone 15 Pro Max 256GB") is not None
+        assert urun_adi_bul("Philips Epilasyon Cihazı BRE720") is not None
+
+
+class TestKarsilastirCtaTemizleme:
+    """'Google'da Karşılaştır' CTA'lı ürün satırından ürün adı kurtarılmalı."""
+
+    def test_markdown_link_cta_temizlenir(self):
+        from services.analiz import urun_adi_bul
+        m = ("📦 Levi's The Trucker Jacket [🔍 Google'da Karşılaştır]"
+             "(https://google.com/search?q=x)\n💰 İndirim: -%68")
+        ad = urun_adi_bul(m)
+        assert ad is not None
+        assert "Trucker" in ad or "Jacket" in ad
+        assert "google" not in ad.lower()
+        assert "karşılaştır" not in ad.lower()
+
+    def test_urun_adi_korunur(self):
+        from services.analiz import _karsilastir_ctasi_temizle
+        t = _karsilastir_ctasi_temizle(
+            "Razer Mouse [Google'da Karşılaştır](http://x.com)")
+        assert "Razer" in t
+        assert "google" not in t.lower()
+
+
+class TestCokluUrunFazlaButon:
+    """3 buton (2 ürün + 1 kampanya) → her ürün KENDİ linkini almalı."""
+
+    def test_fazla_buton_dogru_eslesir(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        btn = [
+            "https://n11.com/tchibo-p-111",
+            "https://n11.com/pols-p-222",
+            "https://hepsiburada.com/kampanya",  # kimliksiz kampanya
+        ]
+        ul = urun_kimligine_gore_grupla(btn)
+        # Gerçek ürün linkleri (p-111, p-222) önce sıralanmalı
+        assert "tchibo-p-111" in ul[0]
+        assert "pols-p-222" in ul[1]
+
+    def test_gercek_urun_oncelikli(self):
+        from services.analiz import urun_kimligine_gore_grupla
+        # Kampanya linki başta olsa bile gerçek ürün öne alınır
+        btn = [
+            "https://hepsiburada.com/kampanya-sayfasi",
+            "https://www.amazon.com.tr/dp/B08PDKKC28",
+        ]
+        ul = urun_kimligine_gore_grupla(btn)
+        assert "/dp/" in ul[0]  # gerçek ürün ilk sırada
