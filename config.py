@@ -4,6 +4,11 @@ Başka hiçbir dosya os.environ'a dokunmaz.
 """
 import os
 
+# ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
+# Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
+# Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
+SURUM = "v21.5-2026.05.25"   # Google link ayıklama + çoklu ürün + kalite kapısı
+
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = int(os.environ.get("API_ID", "0"))
 API_HASH       = os.environ.get("API_HASH", "")

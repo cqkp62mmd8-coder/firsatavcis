@@ -5,6 +5,7 @@ FırsatPulsu — Ana Giriş Noktası
 import asyncio
 import signal
 import sys
+import os
 
 from telethon import TelegramClient
 
@@ -246,6 +247,33 @@ async def main() -> None:
     if not _config_dogrula():
         sys.exit(1)
 
+    # ── SÜRÜM DAMGASI — deploy doğrulama ──
+    # Railway logunda bu satırı görüyorsan, GÜNCEL kod çalışıyor demektir.
+    log("SISTEM", f"🏷️  FırsatPulsu {config.SURUM}")
+    # Kritik düzeltmelerin canlıda aktif olduğunu test et (self-check)
+    try:
+        from services.analiz import urun_kimligine_gore_grupla
+        _test = urun_kimligine_gore_grupla([
+            "https://www.amazon.com.tr/dp/B0TEST00001",
+            "https://www.google.com/search?q=test",
+        ])
+        if len(_test) == 1:
+            log("SISTEM", "✅ Google-link ayıklama AKTİF (güncel kod)")
+        else:
+            log("UYARI", "⚠️ Google-link ayıklama YOK — ESKİ services/analiz.py! "
+                         "Deploy eksik, DEPLOY_REHBERI.md'ye bakın.")
+    except Exception:
+        pass
+
+    # Deploy bütünlük kontrolü — eksik/karışık deploy'u erken yakala
+    try:
+        import deploy_dogrula
+        if not deploy_dogrula.dogrula(os.path.dirname(os.path.abspath(__file__))):
+            log("UYARI", "Bazı dosyalar eksik/bozuk — karışık deploy olabilir! "
+                         "DEPLOY_REHBERI.md'ye bakın. Bot yedek modda devam ediyor.")
+    except Exception:
+        pass
+
     log("SISTEM", (
         f"Min indirim: %{config.MIN_INDIRIM} | "
         f"Kalite: {config.MIN_KALITE} | "
@@ -303,9 +331,17 @@ async def main() -> None:
             except Exception as e:
                 log("UYARI", f"catch_up hatası (yok sayılıyor): {e}")
 
+            # Bütünlük kontrolü — karışık deploy varsa anında tespit et
+            try:
+                from utils import surum
+                butunluk = surum.ozet()
+            except Exception:
+                butunluk = "✅ Bot hazır"
+
             await admin_bildir(
                 tg.client,
-                f"🚀 Bot Başladı v17\n"
+                f"🚀 Bot Başladı\n"
+                f"{butunluk}\n\n"
                 f"Kanal: {len(config.KAYNAK_KANALLAR)}\n"
                 f"Min indirim: %{config.MIN_INDIRIM}\n"
                 f"Toplam istatistik: {cache.ist_yukle().get('toplam', 0)} fırsat\n\n"
