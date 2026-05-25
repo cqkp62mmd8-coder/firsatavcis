@@ -14,7 +14,11 @@ from utils.log import log, simdi_tr
 
 async def gonder(client: TelegramClient) -> None:
     # FIX: ist_kaydet() burada gereksizdi — veri değiştirilmeden kaydediliyordu
-    ist = ist_yukle()
+    try:
+        ist = ist_yukle()
+    except Exception as e:
+        log("UYARI", f"Haftalık rapor: istatistik okunamadı ({e}), atlanıyor")
+        return
     simdi = simdi_tr()
     haftalik = sum(
         ist.get("gunluk", {}).get((simdi - timedelta(days=i)).strftime("%Y-%m-%d"), 0)
