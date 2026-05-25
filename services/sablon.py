@@ -171,11 +171,31 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     tanitim      = (gemini or {}).get("tanitim", "")
 
     # Alt-kategori bilgisi (hiyerarşik) — şablon yazısı için
+    # Gemini varsa onun kategori/alt_kategorisi ÖNCELİKLİ (daha doğru)
+    # Alt kategoriye özel ikon (minimal-şık görsel ayrım)
+    _ALT_IKON = {
+        "ses": "🎧", "telefon": "📱", "saat": "⌚", "tv": "📺",
+        "kamera": "📷", "bilgisayar": "💻", "beyaz_esya": "🔌",
+        "ayakkabi": "👟", "canta": "👜", "parfum": "🌸", "makyaj": "💄",
+        "oyuncak": "🧸", "lego": "🧱", "konsol": "🎮", "lastik": "🛞",
+        "vitamin": "💊", "bez": "🍼", "kahve": "☕",
+    }
     try:
         from services.analiz import kategori_bul_tam
         from utils.ml_kategoriler import kategori_bilgisi
-        ana_k, alt_k, _ = kategori_bul_tam(metin)
-        bilgi = kategori_bilgisi(ana_k, alt_k or None)
+        g_kat = (gemini or {}).get("kategori", "")
+        g_alt = (gemini or {}).get("alt_kategori", "")
+        if g_kat and g_kat != "genel":
+            bilgi = kategori_bilgisi(g_kat, g_alt or None)
+            kat = g_kat
+            if bilgi.get("ikon"):
+                ikon = bilgi["ikon"]
+            # Alt kategoriye özel ikon varsa onu kullan (daha şık)
+            if g_alt in _ALT_IKON:
+                ikon = _ALT_IKON[g_alt]
+        else:
+            ana_k, alt_k, _ = kategori_bul_tam(metin)
+            bilgi = kategori_bilgisi(ana_k, alt_k or None)
         kat_yazi = bilgi.get("yazi", config.KATEGORI_YAZI.get(kat, "Alışveriş"))
     except Exception:
         kat_yazi = config.KATEGORI_YAZI.get(kat, "Alışveriş")
@@ -276,14 +296,23 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     lnk = link_bul(metin, bl)
     mag = magaza_bul(metin, lnk)
     kat, _, kat_tags = kategori_bul(metin)
-    # Alt kategori hashtag varsa, daha spesifik etiket için onu kullan
+    # Gemini kategori verdiyse onu kullan (daha doğru) — ikon + hashtag için
+    g_kat = (gemini or {}).get("kategori", "")
+    g_alt = (gemini or {}).get("alt_kategori", "")
     try:
-        from services.analiz import kategori_bul_tam
         from utils.ml_kategoriler import kategori_bilgisi
-        ana_k, alt_k, _ = kategori_bul_tam(metin)
-        if alt_k:
-            alt_bilgi = kategori_bilgisi(ana_k, alt_k)
-            kat_tags = alt_bilgi.get("hashtag", kat_tags)
+        if g_kat and g_kat != "genel":
+            bilgi = kategori_bilgisi(g_kat, g_alt) if g_alt else kategori_bilgisi(g_kat, "")
+            if bilgi and bilgi.get("hashtag"):
+                kat_tags = bilgi["hashtag"]
+                kat = g_kat
+        else:
+            # Gemini yok → saf-Python alt kategori hashtag
+            from services.analiz import kategori_bul_tam
+            ana_k, alt_k, _ = kategori_bul_tam(metin)
+            if alt_k:
+                alt_bilgi = kategori_bilgisi(ana_k, alt_k)
+                kat_tags = alt_bilgi.get("hashtag", kat_tags)
     except Exception:
         pass
     kanal   = config.HEDEF_KANAL.lstrip("@")
@@ -294,7 +323,33 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
 
     s = _urun_blogu(metin, indirim, bl, gemini=gemini)
     s += ["", hashtag, f"@{kanal}"]
-    return "\n".join(s)
+    cikti = "\n".join(s)
+
+    # ── KALİTE KAPISI: bozuk/eksik şablonu paylaşma (merkezi savunma) ──
+    if not _sablon_kalite_gecer(cikti, _urun, lnk, indirim_turu(metin)):
+        return None
+    return cikti
+
+
+def _sablon_kalite_gecer(cikti: str, urun: str | None, link: str | None,
+                         tur: str) -> bool:
+    """Üretilen şablon paylaşılmaya uygun mu? Son savunma katmanı.
+    Bozuk/eksik çıktıları yakalar — canlıda 'kötü paylaşım' olmasın."""
+    if not cikti or len(cikti) < 30:
+        return False
+    # Link yoksa (marka kampanyası hariç) paylaşma — kullanıcı tıklayacak yer yok
+    if not link and tur != "marka":
+        return False
+    # Ürün adı yer tutucu/çöp mü? ("İndirimli ürün", mağaza adı tek başına)
+    dusuk_kalite_adlar = ("indirimli ürün", "ürün fırsatı", "kampanya")
+    if urun and urun.strip().lower() in dusuk_kalite_adlar:
+        # Bu jenerik adlar sadece marka kampanyasında kabul (gerçek ürün değil)
+        if tur != "marka":
+            return False
+    # Fiyat satırı varsa ama "0 TL" / boş fiyat → bozuk
+    if "🟢 <b> TL" in cikti or "🟢 <b>0 TL" in cikti:
+        return False
+    return True
 
 
 # ── İki ürün, tek mesaj şablonu ─────────────────────────────────

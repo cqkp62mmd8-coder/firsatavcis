@@ -408,16 +408,85 @@ def urun_adi_bul(metin: str) -> str | None:
     if not metin:
         return None
 
+    # ── Ön temizlik: "Google'da Karşılaştır" gibi CTA'ları ve markdown
+    # linklerini ürün adından ayıkla (ama ürün adının kendisini koru) ──
+    temiz_metin = _karsilastir_ctasi_temizle(metin)
+
     # ── Model tabanlı tanıma (öğrenen sınıflandırıcı) ──
     try:
         from utils import urun_taniyici
-        ad = urun_taniyici.urun_adi_cikar(metin)
-        if ad:
+        ad = urun_taniyici.urun_adi_cikar(temiz_metin)
+        if ad and _urun_adi_makul(ad):
             return ad
     except Exception:
         pass   # model hatası → yapısal yedek
 
-    return _urun_adi_bul_yapisal(metin)
+    yapisal = _urun_adi_bul_yapisal(temiz_metin)
+    if yapisal and _urun_adi_makul(yapisal):
+        return yapisal
+    return None
+
+
+def _karsilastir_ctasi_temizle(metin: str) -> str:
+    """Ürün satırındaki '[🔍 Google'da Karşılaştır](url)' gibi markdown
+    linklerini ve karşılaştırma CTA'larını temizler. Ürün adı korunur.
+
+    'Levi's Jacket [🔍 Google'da Karşılaştır](http...)' → 'Levi's Jacket'
+    """
+    if not metin:
+        return metin
+    s = metin
+    # Markdown link: [metin](url) → tamamını sil (CTA linkleri)
+    s = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", " ", s)
+    # Kalan köşeli parantezli CTA'lar: [🔍 Google'da Karşılaştır] → sil
+    s = re.sub(r"\[[^\]]*(?:karşılaştır|karsilastir|google|compare)[^\]]*\]",
+               " ", s, flags=re.IGNORECASE)
+    # "Google'da Karşılaştır" düz metin (köşeli parantezsiz) → sil
+    s = re.sub(r"🔍?\s*google'?\s*da\s+karşılaştır", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip()
+
+
+def _urun_adi_makul(ad: str) -> bool:
+    """Çıkarılan ürün adı makul mü? Fiyat/rakam çöpünü reddet.
+    ('490 04 İndirim İndirimli', 'Normal Fiyat İndirimli' gibi)."""
+    if not ad or len(ad) < 4:
+        return False
+    _FIYAT_BAGLAM = {
+        "fiyat", "fiyatı", "indirim", "indirimli", "normal", "tl", "₺",
+        "lira", "ucuz", "kampanya", "fırsat", "fırsatı", "tasarruf", "adet",
+        # Fiyat-aksiyon kelimeleri (salt açıklama satırları — ürün değil)
+        "düşüyor", "düştü", "sepette", "sepete", "özel", "plus", "pass",
+        "kupon", "kargo", "ücretsiz", "varan", "varana", "kadar", "ile",
+        "altındaki", "ürünün", "özel'e", "sadece", "şimdi", "hemen",
+    }
+    def _tr_lower(s: str) -> str:
+        return s.replace("İ", "i").replace("I", "ı").lower()
+    kelimeler = ad.split()
+    anlamli = [
+        k for k in kelimeler
+        if _tr_lower(k) not in _FIYAT_BAGLAM
+        and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", k)
+    ]
+    if not anlamli:
+        return False
+    # Rakam oranı çok yüksekse → fiyat çöpü
+    rakam = sum(1 for c in ad if c.isdigit())
+    if rakam > len(ad.replace(" ", "")) * 0.4:
+        return False
+    # "Kupon: XXX" / "Kod: XXX" ile başlıyorsa → kupon satırı, ürün değil
+    if re.match(r"^\s*(kupon|kod|indirim\s*kodu)\s*[:=]", ad, re.I):
+        return False
+    # Tek kelime + tamamı büyük harf + ünlü yoksa → kupon kodu (FIRSAT50, AAAAAAAA)
+    if len(kelimeler) == 1:
+        tek = kelimeler[0]
+        if tek.isupper() and len(tek) >= 4:
+            return False
+        # Aynı harfin tekrarı (AAAA, XXXX) → anlamsız
+        harfler = [c for c in tek if c.isalpha()]
+        if harfler and len(set(harfler)) == 1:
+            return False
+    return True
 
 
 def _urun_adi_bul_yapisal(metin: str) -> str | None:
@@ -517,7 +586,8 @@ def _urun_adi_bul_yapisal(metin: str) -> str | None:
 
     def _gecerli_urun_adi(temiz: str) -> bool:
         """Temizlenmiş metin gerçek bir ürün adı mı?
-        Tek kelimeyse ve genel/filler kelimeyse reddet."""
+        Tek kelimeyse ve genel/filler kelimeyse reddet.
+        Çoğunlukla rakam/fiyat ifadesi olan çöpü de reddet."""
         if len(temiz) < 4:
             return False
         if not re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", temiz):
@@ -525,6 +595,23 @@ def _urun_adi_bul_yapisal(metin: str) -> str | None:
         kelimeler = temiz.split()
         # Tek kelime VE genel filler ise ürün adı değil
         if len(kelimeler) == 1 and kelimeler[0].lower() in _GENEL_KELIME:
+            return False
+        # Fiyat/indirim bağlamı kelimeleri — bunlardan oluşan ad gerçek ürün değil
+        # ("490 04 İndirim İndirimli", "Normal Fiyat İndirimli" gibi)
+        _FIYAT_BAGLAM = {
+            "fiyat", "fiyatı", "indirim", "indirimli", "normal", "tl", "₺",
+            "lira", "ucuz", "kampanya", "fırsat", "fırsatı", "tasarruf",
+        }
+        anlamli = [
+            k for k in kelimeler
+            if k.lower() not in _FIYAT_BAGLAM and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{2,}", k)
+        ]
+        # Anlamlı (fiyat-dışı, harf içeren) kelime kalmadıysa → çöp
+        if not anlamli:
+            return False
+        # Rakam oranı çok yüksekse (>%50) → fiyat çöpü
+        rakam_say = sum(1 for c in temiz if c.isdigit())
+        if rakam_say > len(temiz.replace(" ", "")) * 0.5:
             return False
         return True
 
@@ -655,6 +742,7 @@ def urun_kimligi(url: str) -> str:
 def urun_kimligine_gore_grupla(linkler: list[str]) -> list[str]:
     """Bir link listesini ürün kimliğine göre grupla.
     Her benzersiz ürün için TEK temsilci link döner (öncelikli olanı).
+    Arama motoru / fiyat karşılaştırma linkleri ürün DEĞİLDİR — elenir.
 
     Örnek:
       ['amazon.com.tr/dp/X?tag=a', 'amazon.com.tr/dp/X?ref=b', 'trendyol.com/y-p-2']
@@ -662,12 +750,29 @@ def urun_kimligine_gore_grupla(linkler: list[str]) -> list[str]:
     """
     if not linkler:
         return []
+    # Arama/karşılaştırma/sosyal linkler ürün linki sayılmaz
+    _eleme = ("google.com/search", "bing.com/search", "duckduckgo.com",
+              "akakce.com", "cimri.com", "epey.com", "t.me/", "/search?")
     gorulen: dict[str, str] = {}   # kimlik → temsilci link
     for lnk in linkler:
+        ll = (lnk or "").lower()
+        if any(e in ll for e in _eleme):
+            continue   # arama/karşılaştırma linki — atla
         kimlik = urun_kimligi(lnk)
         if kimlik and kimlik not in gorulen:
             gorulen[kimlik] = link_temizle(lnk)
-    return list(gorulen.values())
+    sonuc = list(gorulen.values())
+    # Gerçek ürün sayfalarını (kimlikli: -p-, /dp/, /urun/) öne al; kampanya/
+    # ana sayfa linklerini sona koy → çoklu üründe doğru link eşleşmesi.
+    def _gercek_urun_mu(u: str) -> int:
+        ul = (u or "").lower()
+        if re.search(r'/(?:dp|gp/product)/[a-z0-9]{10}', ul): return 0
+        if re.search(r'-p-?\d', ul): return 0
+        if '/urun/' in ul: return 0
+        if any(k in ul for k in ("ty.gl", "hb.gl", "amzn.to", "sl.n11", "hb.biz")): return 0
+        return 1   # kimliksiz (kampanya/ana sayfa) → sona
+    sonuc.sort(key=_gercek_urun_mu)
+    return sonuc
 
 
 def link_temizle(url: str) -> str:
@@ -691,7 +796,8 @@ def link_bul(metin: str, buton_linkleri: list[str] | None = None) -> str | None:
         "aliexpress.com", "sl.n11.com", "hb.biz", "amzn.to",
     ]
     # Reddedilecekler — arama motorları + Telegram
-    gizli = ("google.com/search", "bing.com/search", "duckduckgo.com", "t.me/")
+    gizli = ("google.com/search", "bing.com/search", "duckduckgo.com", "t.me/",
+             "akakce.com", "cimri.com", "epey.com", "/search?")
 
     def _kabul(url: str) -> bool:
         ul = url.lower()
@@ -882,6 +988,12 @@ def _urun_paragrafi_mi(paragraf: str) -> bool:
         # Sadece % var. Eğer "varan / tüm / seçili" gibi kampanya kelimeleri varsa, ürün değil
         if re.search(r"varan|tüm\s+ürün|seçili\s+ürün|sepette\s+%|sepete\s+%", p, re.I):
             return False
+    # ✅ ile başlayan + ürün adı içermeyen salt açıklama/fiyat paragrafı
+    # ("✅Plus'a Özel İndirim + Kupon İle Sepette 462TL'ye Düşüyor") → ürün DEĞİL,
+    # önceki ürünün açıklamasıdır. Bu, çoklu üründe yanlış bölmeyi önler.
+    ilk_kar = p.lstrip()[:1]
+    if ilk_kar in ("✅", "☑", "✔"):
+        return False   # ✅ ile başlayan satır = fiyat/kupon açıklaması, ürün değil
     return True
 
 

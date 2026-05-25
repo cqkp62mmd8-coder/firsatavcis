@@ -188,13 +188,19 @@ async def worker(
 
                     # ── Görsel kalite kontrolü (v18) ──
                     # Boyut/oran/varyans yetersiz görseller metinle gönderilir.
+                    # CPU-yoğun Pillow işlemleri thread'de — event loop bloklanmaz.
                     from services.gorsel import gorsel_kaliteli_mi
-                    kaliteli, sebep = gorsel_kaliteli_mi(raw)
+                    import asyncio as _aio
+                    _loop = _aio.get_running_loop()
+                    kaliteli, sebep = await _loop.run_in_executor(
+                        None, gorsel_kaliteli_mi, raw)
                     if not kaliteli:
                         log("UYARI", f"Görsel kalite yetersiz: {sebep} — metinle gönderiliyor")
                         raise ValueError(f"görsel kalitesiz: {sebep}")
 
-                    buf = BytesIO(logo_ekle(raw, link=lnk))
+                    islenmis = await _loop.run_in_executor(
+                        None, lambda: logo_ekle(raw, link=lnk))
+                    buf = BytesIO(islenmis)
                     buf.name = "urun.png"
                     kw = dict(file=buf, parse_mode="html", silent=sessiz)
                     if buton:
@@ -244,6 +250,8 @@ async def worker(
             try:
                 from services import health
                 health.son_mesaj_kaydet()
+                from utils import saglik
+                saglik.kaydet("paylasildi")
             except Exception:
                 pass
 
