@@ -1,68 +1,84 @@
-# 📱 TELEFONDAN GÜVENLİ DEPLOY REHBERİ
+# 📱 TELEFON TARAYICISINDAN DEPLOY — Adım Adım
 
-Bu rehber, "karışık deploy" sorununu kökten çözer. Sorun: dosyalar
-GitHub'a eksik/parça parça gidince Railway'de eski+yeni karışıyor.
+Sen doğru yöntemi kullanıyorsun (telefon tarayıcısı). Sorun muhtemelen
+şu iki şeyden biri: (A) klasör içine girmeden yükleme, (B) Railway'in
+yeniden deploy etmemesi. Bu kılavuz ikisini de çözer.
 
-## ⚠️ NEDEN SORUN ÇIKIYORDU?
+═══════════════════════════════════════════════════════════
+BÖLÜM 1 — DOSYALARI DOĞRU YÜKLEMEK
+═══════════════════════════════════════════════════════════
 
-GitHub'ın MOBİL UYGULAMASI dosya yükleyemez (sadece görüntüleme/düzenleme).
-Bu yüzden yeni dosyalar (gemini.py gibi) hiç gitmiyor, eski kalıyordu.
+⚠️ EN SIK HATA: Tüm dosyaları kök dizine yüklemek. utils/ içindeki
+   dosyalar utils/ klasörüne, services/ içindekiler services/'e
+   gitmeli. Yoksa "import hatası" olur.
 
-## ✅ DOĞRU YÖNTEM: Telefon TARAYICISINDAN
+✅ DOĞRU YÖNTEM — Klasör klasör yükle:
 
-GitHub uygulamasını DEĞİL, telefon tarayıcısını (Chrome/Safari) kullan.
+1. Telefon tarayıcısında (Chrome/Safari) github.com → repona gir
 
-### Adım adım:
+2. ÖNCE utils/ klasörünü güncelle (en çok dosya burada, en kritik):
+   • Repoda "utils" klasörüne DOKUN (içine gir)
+   • Sağ üst "Add file" → "Upload files"
+   • Zip'ten çıkardığın utils/ içindeki TÜM .py dosyalarını seç
+   • Aşağı in → "Commit changes" butonuna BAS
+   • ⚠️ Commit'e basmazsan HİÇBİR ŞEY kaydedilmez!
 
-1. **Zip'i telefonda çıkar**
-   - İndirdiğin `firsatpulsu_v21.zip`'i bir klasöre çıkar
-   - Android: "Files by Google" veya "ZArchiver" (ücretsiz)
-   - iPhone: Dosyalar uygulaması → zip'e dokun → otomatik çıkar
+3. Aynısını services/ için yap:
+   • "services" klasörüne gir → Upload files → tüm .py'leri seç → Commit
 
-2. **Tarayıcıdan GitHub'a gir**
-   - Chrome/Safari'de **github.com** (uygulama DEĞİL)
-   - Repona git
+4. Aynısını handlers/ için yap → Commit
+5. Aynısını schedulers/ için yap → Commit
 
-3. **TÜM ESKİ DOSYALARI SİL (en garantili yol)**
-   - Bu, karışık deploy'u %100 bitirir
-   - Repoda her klasörü açıp eski dosyaları silmek yerine, daha kolayı:
-   - Yeni dosyaları yüklerken aynı isimliler otomatik güncellenir
+6. EN SON kök dosyalar (ana dizinde):
+   • Repo ana sayfasına dön (klasör içinde değil)
+   • Upload files → main.py, config.py, client.py, state.py,
+     watchdog.py, deploy_dogrula.py → Commit
 
-4. **Klasör klasör yükle**
-   - "Add file" → "Upload files"
-   - Her klasörü ayrı yükle. ÖNEMLİ SIRA:
-     - Önce kök dosyalar: main.py, config.py, client.py, state.py,
-       watchdog.py, Procfile, requirements.txt
-     - Sonra `utils/` klasörünün İÇİNDEKİ tüm .py dosyaları
-       → **gemini.py, saglik.py burada — kesin yüklendiğini kontrol et!**
-     - Sonra `handlers/`, `services/`, `schedulers/`, `tests/`
-   - Her yüklemede "Commit changes"
+═══════════════════════════════════════════════════════════
+BÖLÜM 2 — RAILWAY'İN YENİDEN DEPLOY ETMESİ
+═══════════════════════════════════════════════════════════
 
-5. **Railway deploy**
-   - Railway → projen → Cmd/Ctrl+K → "Deploy latest commit"
+GitHub'a yükledin ama Railway otomatik algılamayabilir. ZORLA:
 
-### 🔍 KONTROL LİSTESİ (yükleme sonrası GitHub'da gör)
+1. Railway → projene gir
+2. Cmd+K (iPhone) / Ctrl+K (Android) — ya da menüden "Deploy"
+3. "Deploy latest commit" / "Redeploy" seç
+4. Deploy başlasın, ~1-2 dakika bekle
 
-Bu dosyaların repoda göründüğünü DOĞRULA:
-- [ ] utils/gemini.py
-- [ ] utils/saglik.py
-- [ ] utils/ml_dataset.py
-- [ ] services/analiz.py
-- [ ] services/sablon.py
-- [ ] handlers/mesaj.py
-- [ ] schedulers/gunluk.py
-- [ ] tests/test_gercek_mesajlar.py
+═══════════════════════════════════════════════════════════
+BÖLÜM 3 — DOĞRU KOD ÇALIŞIYOR MU? (EN ÖNEMLİ ADIM)
+═══════════════════════════════════════════════════════════
 
-Hepsi varsa deploy temiz olur.
+Deploy bitince Railway'de "Deployments" → "View Logs" aç.
+Botun BAŞLANGIÇ loglarında ŞUNLARI ARA:
 
-## 🛡️ GÜVENCE
+✅ DOĞRU (yeni kod çalışıyor):
+   🏷️ FırsatPulsu v21.7-2026.05.26
+   ✅ Kök (ana)      6/6 .py dosyası
+   ✅ utils/         21/21 .py dosyası
+   ✅ Google-link ayıklama AKTİF (güncel kod)
 
-Kod artık geriye-dönük uyumlu: birkaç dosya eski kalsa bile bot
-ÇÖKMEZ, sadece o özellik yedek moda düşer. Ama tam performans için
-yukarıdaki kontrol listesindeki dosyaların güncel olması gerekir.
+❌ YANLIŞ (eski kod / eksik dosya):
+   ⚠️ utils/  15/21 .py dosyası      ← utils eksik yüklenmiş!
+   ⚠️ Google-link ayıklama YOK — ESKİ kod!
 
-## 💡 EN KALICI ÇÖZÜM
+Bir klasörde "X/Y" tutmuyorsa (örn. 15/21), o klasöre eksik dosya
+yüklenmiş demektir. O klasörü tekrar yükle.
 
-Bir kez bilgisayara erişebilirsen (izin/hafta sonu), tarayıcıdan
-tüm klasörü tek seferde sürükle-bırak yap → karışık deploy bir daha
-asla olmaz. 5 dakika sürer.
+Hiç "🏷️ FırsatPulsu v21.7" satırı yoksa, ya deploy olmamış ya da
+main.py güncellenmemiş.
+
+═══════════════════════════════════════════════════════════
+ÖZET KONTROL LİSTESİ
+═══════════════════════════════════════════════════════════
+[ ] utils/ klasörüne 21 dosya yüklendi + commit
+[ ] services/ klasörüne 9 dosya yüklendi + commit
+[ ] handlers/ klasörüne 4 dosya yüklendi + commit
+[ ] schedulers/ klasörüne 4 dosya yüklendi + commit
+[ ] Kök dizine 6 dosya yüklendi + commit
+[ ] Railway'de "Deploy latest commit" yapıldı
+[ ] Logda "FırsatPulsu v21.7" görüldü
+[ ] Logda tüm klasörler "X/X" gösteriyor
+[ ] Logda "Google-link ayıklama AKTİF" görüldü
+
+Hepsi tamamsa — aylardır uğraştığın sorunlar bitti demektir.

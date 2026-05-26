@@ -7,7 +7,7 @@ import os
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v21.5-2026.05.25"   # Google link ayıklama + çoklu ürün + kalite kapısı
+SURUM = "v21.8-2026.05.27"   # Gemini-siz ogrenen sistem: urun hafizasi + admin duzeltme
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = int(os.environ.get("API_ID", "0"))

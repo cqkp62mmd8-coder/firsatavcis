@@ -268,7 +268,19 @@ async def main() -> None:
     # Deploy bütünlük kontrolü — eksik/karışık deploy'u erken yakala
     try:
         import deploy_dogrula
-        if not deploy_dogrula.dogrula(os.path.dirname(os.path.abspath(__file__))):
+        _kok = os.path.dirname(os.path.abspath(__file__))
+        # Klasör başına dosya sayısı — eksik klasörü logta göster
+        try:
+            import io, contextlib
+            _buf = io.StringIO()
+            with contextlib.redirect_stdout(_buf):
+                deploy_dogrula.klasor_ozeti(_kok)
+            for _satir in _buf.getvalue().splitlines():
+                if _satir.strip():
+                    log("SISTEM", _satir.strip())
+        except Exception:
+            pass
+        if not deploy_dogrula.dogrula(_kok):
             log("UYARI", "Bazı dosyalar eksik/bozuk — karışık deploy olabilir! "
                          "DEPLOY_REHBERI.md'ye bakın. Bot yedek modda devam ediyor.")
     except Exception:
