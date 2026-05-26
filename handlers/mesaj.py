@@ -215,29 +215,49 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
             from services.analiz import kategori_bul_tam
             ana_k, alt_k, guven = kategori_bul_tam(blok)
 
-            if guven >= 0.75 and ana_k != "genel":
-                # A) Yüksek güven → pseudo-label olarak öğren
-                tam_kat = f"{ana_k}:{alt_k}" if alt_k else ana_k
-                ml_kategori.egit_tek(urun, tam_kat, kaynak="auto", hemen_egit=False)
-            elif guven < 0.55:
-                # B) Belirsiz → 'genel' kategoride gönder (kullanıcı tercihi)
-                #    Belirsiz tahminleri de kaydet, ileride manuel etiketleme için
-                ml_kategori.belirsiz_kaydet(urun, ana_k, guven)
-                kat = "genel"   # belirsizse genel kategori ile gönder
-
-            # C) Marka öğrenme: yüksek güvenli durumlarda yeni marka adayı tespit
+            # ÖNCE HAFIZAYA SOR: bu ürün/marka daha önce öğrenildi mi?
+            # Öğrenildiyse, modelin tahminini override et (kalıcı öğrenme).
             try:
-                from utils import marka_ogrenme
-                if guven >= 0.7:
-                    marka_ogrenme.kaydet(urun, ana_k)
+                from utils import urun_hafiza
+                hatirlanan = urun_hafiza.hatirla(urun, lnk)
+                if hatirlanan:
+                    if ":" in hatirlanan:
+                        ana_k, alt_k = hatirlanan.split(":", 1)
+                    else:
+                        ana_k, alt_k = hatirlanan, None
+                    guven = max(guven, 0.85)   # hafıza güçlü sinyal
+                    kat = ana_k                 # şablon kategorisini güncelle
             except Exception:
                 pass
 
-            # D) Ürün tanıyıcıya pozitif örnek öğret (self-supervised)
+            # ÖNEMLİ: Model KENDİ tahminini kendine öğretmemeli (echo chamber /
+            # kısır döngü — yanlışı pekiştirir). Bunun yerine, marka→kategori
+            # TUTARLILIĞINDAN öğreniyoruz: aynı marka defalarca aynı kategoride
+            # görülürse bu güçlü bir DIŞ sinyaldir (modelin kendi onayı değil).
+            tam_kat = f"{ana_k}:{alt_k}" if alt_k else ana_k
+
+            # A) Marka→kategori gözlemi kaydet (tutarlılık öğrenmesi).
+            #    marka_ogrenme yeterli tutarlı gözlem birikince kalıcı öğrenir.
+            if ana_k != "genel" and guven >= 0.6:
+                try:
+                    from utils import marka_ogrenme
+                    # Sadece GÖZLEM kaydet — marka_ogrenme tutarlılık eşiğini
+                    # kendisi uygular (örn. 3+ kez aynı kategori → öğren).
+                    marka_ogrenme.kaydet(urun, ana_k)
+                except Exception:
+                    pass
+
+            # B) Belirsiz tahminleri etiketleme kuyruğuna al (admin sonra düzeltir)
+            if guven < 0.55:
+                ml_kategori.belirsiz_kaydet(urun, ana_k, guven)
+                kat = "genel"   # belirsizse 'genel' ile gönder (yanlış kategoriden iyi)
+
+            # C) ÜRÜN HAFIZASI: bu ürünü/markayı kalıcı hatırla.
+            #    Aynı ürün tekrar geldiğinde sıfırdan tahmin etmek yerine
+            #    öğrenilen kategoriyi kullan (günde 1000 mesajın çoğu tekrar).
             try:
-                from utils import urun_taniyici
-                if guven >= 0.7:
-                    urun_taniyici.ogren_pozitif(urun)
+                from utils import urun_hafiza
+                urun_hafiza.kaydet(urun, lnk, tam_kat if ana_k != "genel" else None)
             except Exception:
                 pass
 

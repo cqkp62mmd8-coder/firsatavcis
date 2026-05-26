@@ -49,6 +49,8 @@ _YARDIM = (
     "/fiyat — Fiyat zekası kategori profilleri\n"
     "/gemini — Yapay zeka (Gemini) durumu\n"
     "/topluluk — Topluluk oyları & en çok oylananlar\n"
+    "/yanlis &lt;kategori&gt; — Son ürünün kategorisini düzelt (bot öğrenir)\n"
+    "/hafiza — Öğrenme hafızası durumu\n"
     "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
 )
@@ -208,6 +210,12 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/topluluk":
             await _topluluk_raporu(event)
+
+        elif komut == "/yanlis":
+            await _kategori_duzelt(event, mesaj_metin)
+
+        elif komut == "/hafiza":
+            await _hafiza_durum(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -945,3 +953,77 @@ def kaydet(
             await _komut_isle(event, kuyruk)
 
         log("UYARI", "Admin handler: BOT_TOKEN yok, kullanıcı client fallback aktif")
+
+
+async def _kategori_duzelt(event, mesaj_metin: str) -> None:
+    """Son paylaşılan ürünün kategorisini düzelt — bot kalıcı öğrenir.
+    Kullanım: /yanlis kozmetik:vucut
+    (parametresiz: son ürünü ve mevcut kategorisini gösterir)"""
+    from services import kuyruk
+    son = kuyruk.son_paylasilani_al()
+    if not son or not son.get("urun"):
+        await event.reply("⚠️ Henüz paylaşılan ürün yok.", parse_mode="html")
+        return
+
+    if not mesaj_metin.strip():
+        await event.reply(
+            f"📦 Son ürün: <b>{son['urun']}</b>\n"
+            f"📁 Mevcut kategori: <code>{son.get('kategori', '?')}</code>\n\n"
+            f"Düzeltmek için: <code>/yanlis &lt;dogru_kategori&gt;</code>\n"
+            f"Örnek: <code>/yanlis kozmetik:vucut</code>",
+            parse_mode="html",
+        )
+        return
+
+    dogru = mesaj_metin.strip().lower()
+    # Kategori geçerli mi?
+    from utils.ml_kategoriler import KATEGORI_AGAC, ana_kategori_listesi
+    ana = dogru.split(":")[0]
+    if ana not in KATEGORI_AGAC:
+        await event.reply(
+            f"⚠️ Geçersiz kategori: <code>{ana}</code>\n"
+            f"Geçerli: {', '.join(ana_kategori_listesi())}",
+            parse_mode="html",
+        )
+        return
+
+    # 1. Kalıcı hafızaya düzeltmeyi yaz (en güçlü sinyal)
+    try:
+        from utils import urun_hafiza
+        urun_hafiza.duzelt(son["urun"], son.get("link"), dogru)
+    except Exception as e:
+        log("UYARI", f"Hafıza düzeltme: {e}")
+
+    # 2. ML modeline de örnek olarak öğret (anında retrain)
+    try:
+        from utils import ml_kategori
+        ml_kategori.egit_tek(son["urun"], dogru, kaynak="duzeltme", hemen_egit=True)
+    except Exception as e:
+        log("UYARI", f"ML düzeltme: {e}")
+
+    await event.reply(
+        f"✅ Öğrenildi!\n\n"
+        f"<b>{son['urun']}</b>\n"
+        f"→ <code>{dogru}</code>\n\n"
+        f"Bu ürün/marka bir daha bu kategoride paylaşılacak.",
+        parse_mode="html",
+    )
+
+
+async def _hafiza_durum(event) -> None:
+    """Öğrenme hafızasının durumunu göster."""
+    try:
+        from utils import urun_hafiza
+        ist = urun_hafiza.istatistik()
+        await event.reply(
+            f"🧠 <b>Öğrenme Hafızası</b>\n\n"
+            f"📦 Öğrenilen ürün: {ist['toplam_urun']}\n"
+            f"📁 Kategorili: {ist['kategorili']}\n"
+            f"🏷️ Öğrenilen marka: {ist['ogrenilen_marka']}\n"
+            f"🔁 Tekrar eden ürün: {ist['tekrar_eden']}\n\n"
+            f"<i>Bot her paylaşımda öğreniyor. Yanlış kategori görürsen "
+            f"/yanlis ile düzelt, kalıcı öğrenir.</i>",
+            parse_mode="html",
+        )
+    except Exception as e:
+        await event.reply(f"⚠️ Hafıza durumu alınamadı: {e}", parse_mode="html")
