@@ -144,9 +144,10 @@ def indirim_oranini_bul(metin: str) -> int:
     for adet_s, kupon_s, adet_fiyat_s in adet_kupon:
         kv = _parse(kupon_s)
         af = _parse(adet_fiyat_s)
+        adet_n = int(adet_s) if adet_s.isdigit() and int(adet_s) > 0 else 1
         if af > 0:
-            normal = af + kv / int(adet_s)
-            ind = round(kv / int(adet_s) / normal * 100)
+            normal = af + kv / adet_n
+            ind = round(kv / adet_n / normal * 100)
             if 1 <= ind <= 99:
                 return max(ind, config.MIN_INDIRIM if kv >= config.KUPON_MIN_TL else 1)
 
@@ -235,7 +236,8 @@ def fiyat_bul(metin: str) -> tuple[str | None, str | None, float, float]:
     if adet_kupon:
         adet, kupon_s, adet_fiyat_s = adet_kupon[0]
         kv, af = _parse(kupon_s), _parse(adet_fiyat_s)
-        normal_adet = af + kv / int(adet)
+        adet_n = int(adet) if adet.isdigit() and int(adet) > 0 else 1
+        normal_adet = af + kv / adet_n
         return f"{normal_adet:.0f}", adet_fiyat_s, normal_adet, af
 
     # 5. ₺ ve TL genel
@@ -417,32 +419,76 @@ def urun_adi_bul(metin: str) -> str | None:
         from utils import urun_taniyici
         ad = urun_taniyici.urun_adi_cikar(temiz_metin)
         if ad and _urun_adi_makul(ad):
-            return ad
+            return _ad_son_temizlik(ad)
     except Exception:
         pass   # model hatası → yapısal yedek
 
     yapisal = _urun_adi_bul_yapisal(temiz_metin)
     if yapisal and _urun_adi_makul(yapisal):
-        return yapisal
+        return _ad_son_temizlik(yapisal)
     return None
 
 
-def _karsilastir_ctasi_temizle(metin: str) -> str:
-    """Ürün satırındaki '[🔍 Google'da Karşılaştır](url)' gibi markdown
-    linklerini ve karşılaştırma CTA'larını temizler. Ürün adı korunur.
+def _ad_son_temizlik(ad: str) -> str:
+    """Ürün adının BAŞINDAN ve SONUNDAN fiyat-bağlam takılarını temizler.
+    'Defacto Tişört yerine' → 'Defacto Tişört'
+    'iPhone 15 indirimli fiyat' → 'iPhone 15'"""
+    if not ad:
+        return ad
+    _TAKILAR = {
+        "yerine", "fiyat", "fiyatı", "indirimli", "indirim", "normal",
+        "sadece", "şimdi", "tl", "₺", "lira", "kupon", "kuponla",
+        "sepette", "sepete", "düşüyor", "kargo", "ücretsiz",
+    }
+    def _trl(s): return s.replace("İ", "i").replace("I", "ı").lower()
+    kelimeler = ad.split()
+    # Sondan temizle
+    while kelimeler and _trl(kelimeler[-1].strip(".,:;-")) in _TAKILAR:
+        kelimeler.pop()
+    # Baştan temizle
+    while kelimeler and _trl(kelimeler[0].strip(".,:;-")) in _TAKILAR:
+        kelimeler.pop(0)
+    sonuc = " ".join(kelimeler).strip()
+    return sonuc if len(sonuc) >= 3 else ad
 
-    'Levi's Jacket [🔍 Google'da Karşılaştır](http...)' → 'Levi's Jacket'
+
+def _karsilastir_ctasi_temizle(metin: str) -> str:
+    """ÜRÜN ADI ÖN-TEMİZLEME SİSTEMİ.
+
+    Ürün adını çıkarmadan ÖNCE, mesajdaki tüm "gürültüyü" temizler:
+      • Markdown linkleri:        [metin](url)
+      • Karşılaştırma CTA'ları:   🔍 Google'da Karşılaştır
+      • Hashtag etiketleri:       #İşbirliği #sponsorlu #reklam
+      • Uzun teknik parantezler:  (1.700 MB/s okuma, 4K, XQD...)
+      • Yönlendirme ifadeleri:    stoklar eriyor, hemen yakala
+
+    Amaç: Geriye SADECE gerçek ürün adı kalsın.
+    'SanDisk CFexpress kartı (uzun teknik...) 🔍 Karşılaştır #İşbirliği'
+      → 'SanDisk CFexpress kartı'
     """
     if not metin:
         return metin
     s = metin
-    # Markdown link: [metin](url) → tamamını sil (CTA linkleri)
+    # 1. Markdown link: [metin](url) → sil (CTA linkleri)
     s = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", " ", s)
-    # Kalan köşeli parantezli CTA'lar: [🔍 Google'da Karşılaştır] → sil
+    # 2. Köşeli parantezli CTA: [🔍 Google'da Karşılaştır] → sil
     s = re.sub(r"\[[^\]]*(?:karşılaştır|karsilastir|google|compare)[^\]]*\]",
                " ", s, flags=re.IGNORECASE)
-    # "Google'da Karşılaştır" düz metin (köşeli parantezsiz) → sil
+    # 3. "Google'da Karşılaştır" düz metin → sil
     s = re.sub(r"🔍?\s*google'?\s*da\s+karşılaştır", " ", s, flags=re.IGNORECASE)
+    # 4. Hashtag etiketleri (#İşbirliği, #sponsorlu, #reklam vb) → sil
+    #    Ürün adında hashtag olmaz; bunlar reklam/etiket gürültüsü.
+    s = re.sub(r"#\w+", " ", s)
+    # 5. Uzun teknik parantez içeriği (>25 karakter) → sil
+    #    "(1.700 MB/s okuma, 1.200 MB/s yazma, RescuePRO...)" gibi.
+    #    Kısa parantezler korunur ("(2'li paket)" gibi faydalı olabilir).
+    s = re.sub(r"\([^)]{25,}\)", " ", s)
+    # 6. Yönlendirme/aciliyet ifadeleri → sil (ürün adı değil)
+    s = re.sub(
+        r"(stoklar?\s+(eriyor|tükenmeden|bitmeden)[^\n]*|hemen\s+yakala[^\n]*"
+        r"|son\s+\d+\s+adet[^\n]*|kaçırma[^\n]*)",
+        " ", s, flags=re.IGNORECASE)
+    # 7. Fazla boşlukları temizle
     s = re.sub(r"\s{2,}", " ", s)
     return s.strip()
 
@@ -1012,7 +1058,12 @@ _IKI_FIYAT_TL = re.compile(r"\d[\d.,]*\s*(?:TL|₺|lira).{2,80}?\d[\d.,]*\s*(?:T
 
 
 def _satir_ici_iki_urun_var_mi(satir: str) -> bool:
-    """Tek satırda iki ürün+fiyat ifadesi var mı?"""
+    """Tek satırda iki ürün+fiyat ifadesi var mı?
+    ✅/☑/✔ ile başlayan satırlar fiyat/kupon AÇIKLAMASIDIR — ürün değil,
+    bölünmemeli (önceki ürünün fiyat detayı)."""
+    s = satir.lstrip()
+    if s[:1] in ("✅", "☑", "✔"):
+        return False
     if not _IKI_FIYAT_TL.search(satir):
         return False
     if not _SATIR_ICI_AYIRICI.search(satir):

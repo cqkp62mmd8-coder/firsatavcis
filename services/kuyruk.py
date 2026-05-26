@@ -24,6 +24,14 @@ _MAX_RETRY = 3
 _floodwait_carpani: float = 1.0
 _son_floodwait_zaman: float = 0.0
 
+# Son paylaşılan ürün — admin /yanlis komutuyla kategori düzeltmesi için
+_son_paylasilan: dict | None = None
+
+
+def son_paylasilani_al() -> dict | None:
+    """Son paylaşılan ürünün bilgisini döndürür (admin düzeltmesi için)."""
+    return _son_paylasilan
+
 
 def _aktif_bekleme() -> int:
     """#12 — Spike modu: yoğun saatlerde bekleme süresini kısalt.
@@ -221,6 +229,24 @@ async def worker(
 
             if msg:
                 await tepki_ekle(client, msg)
+
+                # Son paylaşılan ürünü sakla — admin /yanlis ile düzeltebilsin
+                try:
+                    import re as _re
+                    # Şablondan ürün adını çıkar (<b>...</b> ilk kalın satır)
+                    m_ad = _re.search(r"<b>([^<]{4,})</b>", sablon)
+                    ad = m_ad.group(1).strip() if m_ad else None
+                    # Başlık/fiyat satırlarını atla (ürün adı genelde 2. <b>)
+                    bloklar = _re.findall(r"<b>([^<]+)</b>", sablon)
+                    for b in bloklar:
+                        if not any(x in b for x in ("İNDİRİM", "FIRSAT", "ELİT", "TL")):
+                            ad = b.strip()
+                            break
+                    global _son_paylasilan
+                    _son_paylasilan = {"urun": ad, "link": lnk, "kategori": kat,
+                                       "mesaj_id": msg.id}
+                except Exception:
+                    pass
 
                 # ── v18: Mesaj meta'yı segmentasyon için kaydet ──
                 try:

@@ -127,11 +127,13 @@ def _hashtag(kat_hashtagler: list[str], magaza: str) -> str:
     """En fazla 3 hashtag: kategori ana etiketi + mağaza + FırsatPulsu."""
     tags: list[str] = []
     if kat_hashtagler:
-        tags.append(kat_hashtagler[0])   # İlk = en spesifik
+        ilk = (kat_hashtagler[0] or "").strip()
+        if ilk and ilk != "#":
+            tags.append(ilk)   # İlk = en spesifik (boş değilse)
     mt = config.MAGAZA_HASHTAG.get(magaza, "")
     if mt:
         tags.append(mt)
-    tags.append("#FırsatPulsu")
+    tags.append("#kacirmabak")
     return " ".join(tags)
 
 
@@ -349,6 +351,15 @@ def _sablon_kalite_gecer(cikti: str, urun: str | None, link: str | None,
     # Fiyat satırı varsa ama "0 TL" / boş fiyat → bozuk
     if "🟢 <b> TL" in cikti or "🟢 <b>0 TL" in cikti:
         return False
+    # Site/mağaza adı ürün adı yerine geçmiş mi? ("Amazon TR ürünleri",
+    # "Trendyol kampanyası" gibi jenerik başlıklar) — gerçek ürün adı yoksa
+    # ve indirim türü "marka" DEĞİLSE, bu çöp paylaşımdır → reddet.
+    if tur != "marka":
+        for magaza in config.MAGAZA_EMOJI.keys():
+            if (f"<b>{magaza} ürünleri</b>" in cikti
+                    or f"<b>{magaza} kampanyası</b>" in cikti
+                    or f"<b>{magaza} • " in cikti):
+                return False
     return True
 
 
