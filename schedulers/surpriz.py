@@ -47,7 +47,7 @@ async def gonder(client: TelegramClient) -> None:
     if u["eski"] and u["yeni"]:
         satirlar += [f"🏷️ Normal:    <s>{u['eski']} TL</s>", f"💰 İndirimli: <b>{u['yeni']} TL</b>", ""]
     satirlar.append(f"🏪 {u['magaza']}  •  🔥 <b>%{u['indirim']} İNDİRİM</b>")
-    satirlar += ["", f"#SürprizFırsat #GünlükFırsat {mt} #FırsatPulsu", f"📢 @{kanal}"]
+    satirlar += ["", f"#SürprizFırsat #GünlükFırsat {mt} #kacirmabak", f"📢 @{kanal}"]
     if u.get("link"):
         satirlar.append(f"\n🔗 <a href='{u['link']}'>Fırsata Git</a>")
 

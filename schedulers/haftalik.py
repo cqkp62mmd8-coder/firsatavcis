@@ -55,7 +55,7 @@ async def gonder(client: TelegramClient) -> None:
     satirlar += [
         "",
         "Bildirimleri açık tutun! 🔔", "",
-        "#HaftalıkRapor #FırsatPulsu",
+        "#HaftalıkRapor #kacirmabak",
         f"📢 @{kanal}",
     ]
     try:
