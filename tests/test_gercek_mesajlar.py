@@ -302,3 +302,160 @@ class TestKenarDurumlar:
         # Boş/çöp girdi → sıfıra bölme yok
         assert dil.turkce_skoru("") == 0.5
         assert 0 <= dil.turkce_skoru("a b c") <= 1
+
+
+class TestSifiraBolme:
+    """Fiyat parse'ta sıfıra bölme — '0 adet' gibi mesajlar çökmemeli."""
+
+    def test_sifir_adet_cokmez(self):
+        from services.analiz import fiyat_bul, indirim_oranini_bul
+        # 0 adet → ZeroDivisionError olmamalı
+        r = fiyat_bul("0 Adet Alımda 100₺ Kuponla Adedi 50₺")
+        assert r is not None
+        i = indirim_oranini_bul("0 adet alımda 100₺ kuponla adedi 50₺")
+        assert isinstance(i, int)
+
+    def test_normal_adet_dogru(self):
+        from services.analiz import fiyat_bul
+        e, y, ev, yv = fiyat_bul("3 Adet Alımda 90₺ Kuponla Adedi 50₺")
+        assert yv == 50.0
+        assert ev > yv
+
+
+class TestDefactoFiyatSatiri:
+    """✅ ile başlayan + tireli fiyat satırı bölünmemeli (Defacto senaryosu).
+    '✅179TL - Ürün Altındaki 30TL Kupon İle Sepette 149TL'ye Düşüyor'"""
+
+    def test_tireli_fiyat_satiri_bolunmez(self):
+        from services.analiz import _satir_ici_iki_urun_var_mi
+        s = "✅179TL - Ürün Altındaki 30TL Kupon İle Sepette 149TL'ye Düşüyor"
+        # ✅ ile başlayan satır iki ürün sayılmamalı
+        assert _satir_ici_iki_urun_var_mi(s) is False
+
+    def test_defacto_iki_urun(self):
+        from services.analiz import mesaj_bolum_ayir, urun_adi_bul
+        ham = ("🔥Defacto %100 Pamuk Basic Tişört\n\n"
+               "✅179TL - Ürün Altındaki 30TL Kupon İle Sepette 149TL'ye Düşüyor\n"
+               "🔻Isana Argan Yağı Vücut Bakım Seti 200Ml 280TL\n"
+               "🚚Premium Üyelik Ücretsiz Kargo")
+        bloklar = mesaj_bolum_ayir(ham)
+        assert len(bloklar) == 2
+        ad0 = urun_adi_bul(bloklar[0]) or ""
+        assert "Defacto" in ad0
+        assert "Düşüyor" not in ad0
+
+
+class TestHashtagKacirmabak:
+    """Hashtag #kacirmabak olmalı (#FırsatPulsu değil)."""
+
+    def test_hashtag_kanal_adi(self):
+        from services.sablon import _hashtag
+        h = _hashtag(["#Telefon"], "Trendyol")
+        assert "#kacirmabak" in h
+        assert "#FırsatPulsu" not in h
+
+
+class TestAdSonTemizlik:
+    """Ürün adı baş/son fiyat-bağlam takıları temizlenmeli."""
+
+    def test_yerine_takisi_temizlenir(self):
+        from services.analiz import _ad_son_temizlik
+        assert _ad_son_temizlik("Defacto Tişört yerine") == "Defacto Tişört"
+        assert _ad_son_temizlik("iPhone 15 indirimli fiyat") == "iPhone 15"
+        assert _ad_son_temizlik("normal Nike ayakkabı") == "Nike ayakkabı"
+
+    def test_gercek_ad_korunur(self):
+        from services.analiz import _ad_son_temizlik
+        assert _ad_son_temizlik("iPhone 15 Pro Max") == "iPhone 15 Pro Max"
+
+
+class TestSanDiskHashtagIsbirligi:
+    """#İşbirliği + Google CTA + uzun teknik parantez → ürün adı temiz çıkmalı,
+    site adı (Amazon TR) ürün adı olmamalı, kategori doğru olmalı."""
+
+    def test_hashtag_isbirligi_temizlenir(self):
+        from services.analiz import urun_adi_bul
+        m = ("📦 SanDisk Extreme Pro CFexpress hafıza kartı Tip B 256 GB "
+             "(1.700 MB/s okuma, 1.200 MB/s yazma, RescuePRO Deluxe, 4K)\n"
+             "🔍 Google'da Karşılaştır #İşbirliği")
+        ad = urun_adi_bul(m)
+        assert ad is not None
+        assert "SanDisk" in ad
+        assert "İşbirliği" not in ad
+        assert "Google" not in ad
+        assert "MB" not in ad  # teknik parantez temizlenmeli
+
+    def test_uzun_teknik_parantez_temizlenir(self):
+        from services.analiz import _karsilastir_ctasi_temizle
+        s = _karsilastir_ctasi_temizle(
+            "Nike ayakkabı (çok uzun teknik açıklama burada devam ediyor uzun)")
+        assert "uzun teknik" not in s
+        assert "Nike" in s
+
+    def test_hashtag_silinir(self):
+        from services.analiz import _karsilastir_ctasi_temizle
+        s = _karsilastir_ctasi_temizle("Apple AirPods #İşbirliği #sponsorlu")
+        assert "#" not in s
+        assert "Apple" in s
+
+
+class TestSiteAdiCopEngelleme:
+    """Site/mağaza adı ürün adı yerine geçmiş çöp paylaşım → engellenmeli."""
+
+    def test_urun_adsiz_paylasilmaz(self):
+        from services.sablon import olustur
+        # Ürün adı yok, sadece fiyat → "Amazon TR" çöpü yerine None
+        ham = "💰 Normal Fiyat: ₺15.950 İndirim: -%48 İndirimli: ₺8.259"
+        assert olustur(ham, 48, ["https://amazon.com.tr/dp/B0X"]) is None
+
+    def test_gercek_urun_paylasilir(self):
+        from services.sablon import olustur
+        # Gerçek ürün adı var → paylaşılır
+        ham = "SanDisk hafıza kartı 256 GB 8259 TL"
+        s = olustur(ham, 48, ["https://amazon.com.tr/dp/B0X"])
+        assert s is not None
+        assert "SanDisk" in s
+
+
+class TestUrunHafizaOgrenme:
+    """Gemini'siz öğrenme — ürün hafızası ve marka tutarlılığı."""
+
+    def _hazirla(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_hafiza"
+        os.makedirs("/tmp/test_hafiza", exist_ok=True)
+        from utils import db
+        db.init()
+        from utils import urun_hafiza
+        # Temiz başla
+        try:
+            with db.cursor() as c:
+                c.execute("DELETE FROM urun_hafiza")
+                c.execute("DELETE FROM marka_kategori")
+        except Exception:
+            pass
+        return urun_hafiza
+
+    def test_tam_urun_hatirlama(self):
+        uh = self._hazirla()
+        uh.kaydet("SanDisk hafıza kartı", "https://amazon.com.tr/dp/B0SAND1", "elektronik:aksesuar")
+        assert uh.hatirla("SanDisk hafıza kartı", "https://amazon.com.tr/dp/B0SAND1") == "elektronik:aksesuar"
+
+    def test_admin_duzeltme_kalici(self):
+        uh = self._hazirla()
+        uh.kaydet("Isana Vücut Seti", "https://hb.com/isana-p-1", "saglik:kisisel")
+        uh.duzelt("Isana Vücut Seti", "https://hb.com/isana-p-1", "kozmetik:vucut")
+        assert uh.hatirla("Isana Vücut Seti", "https://hb.com/isana-p-1") == "kozmetik:vucut"
+
+    def test_marka_tutarlilik_ogrenme(self):
+        uh = self._hazirla()
+        # Aynı marka 3 kez giyim → marka öğrenilmeli
+        uh.kaydet("Defacto Tişört", "https://trendyol.com/d-p-1", "giyim:ust_giyim")
+        uh.kaydet("Defacto Pantolon", "https://trendyol.com/d-p-2", "giyim:alt_giyim")
+        uh.kaydet("Defacto Mont", "https://trendyol.com/d-p-3", "giyim:dis_giyim")
+        # Yeni Defacto ürünü → giyim hatırlanmalı
+        assert uh.hatirla("Defacto Şort", None) == "giyim"
+
+    def test_bilinmeyen_urun_none(self):
+        uh = self._hazirla()
+        assert uh.hatirla("Hiç görülmemiş ürün xyz", None) is None
