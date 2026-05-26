@@ -62,5 +62,7 @@ async def kritik_uyari(tg_client, mesaj: str) -> None:
             f"🚨 <b>Kritik Uyarı</b>\n\n<code>{mesaj[:3500]}</code>",
             parse_mode="html",
         )
+    except (ValueError, TypeError):
+        log("UYARI", "Kritik uyarı gönderilemedi: ADMIN_ID geçersiz")
     except Exception as e:
         log("UYARI", f"Kritik uyarı gönderilemedi: {e}")

@@ -66,15 +66,18 @@ def gorulmus_temizle() -> int:
 # ════════════════════════════════════════════════════════════════
 
 def _ist_oku(anahtar: str, default=None):
-    with db.cursor() as c:
-        c.execute("SELECT value FROM istatistik WHERE key=?", (anahtar,))
-        row = c.fetchone()
-        if row is None:
-            return default
-        try:
-            return json.loads(row["value"])
-        except Exception:
-            return default
+    try:
+        with db.cursor() as c:
+            c.execute("SELECT value FROM istatistik WHERE key=?", (anahtar,))
+            row = c.fetchone()
+            if row is None:
+                return default
+            try:
+                return json.loads(row["value"])
+            except Exception:
+                return default
+    except Exception:
+        return default   # tablo yok / DB hatası → güvenli default
 
 
 def _ist_yaz(anahtar: str, deger) -> None:

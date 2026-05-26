@@ -37,6 +37,22 @@ def _baglanti() -> sqlite3.Connection:
     return conn
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _baglan():
+    """Bağlantıyı garanti kapatan context manager (sızıntı önler)."""
+    conn = _baglanti()
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 _tablo_kuruldu = False
 
 
@@ -102,33 +118,30 @@ def tikla_kaydet(kullanici_id: Optional[int], mesaj_id: Optional[int], oy_turu: 
     Döner: True = yeni oy kaydedildi, False = bu kullanıcı zaten oy vermiş."""
     _ilk_kurulum()
     try:
-        conn = _baglanti()
-        # Aynı kullanıcı aynı mesaja daha önce oy verdi mi?
-        if kullanici_id and mesaj_id:
-            mevcut = conn.execute(
-                "SELECT oy_turu FROM kullanici_tikla WHERE kullanici_id=? AND mesaj_id=? LIMIT 1",
-                (int(kullanici_id), int(mesaj_id))
-            ).fetchone()
-            if mevcut:
-                # Oyunu değiştiriyorsa güncelle, aynıysa hiçbir şey yapma
-                if mevcut[0] == oy_turu:
-                    conn.close()
-                    return False
-                conn.execute(
-                    "UPDATE kullanici_tikla SET oy_turu=?, ts=? WHERE kullanici_id=? AND mesaj_id=?",
-                    (oy_turu, int(time.time()), int(kullanici_id), int(mesaj_id))
-                )
-                conn.commit()
-                conn.close()
-                return True
-        conn.execute(
-            "INSERT INTO kullanici_tikla (ts, kullanici_id, mesaj_id, oy_turu) VALUES (?, ?, ?, ?)",
-            (int(time.time()), int(kullanici_id) if kullanici_id else None,
-             int(mesaj_id) if mesaj_id else None, oy_turu)
-        )
-        conn.commit()
-        conn.close()
-        return True
+        with _baglan() as conn:
+            # Aynı kullanıcı aynı mesaja daha önce oy verdi mi?
+            if kullanici_id and mesaj_id:
+                mevcut = conn.execute(
+                    "SELECT oy_turu FROM kullanici_tikla WHERE kullanici_id=? AND mesaj_id=? LIMIT 1",
+                    (int(kullanici_id), int(mesaj_id))
+                ).fetchone()
+                if mevcut:
+                    # Oyunu değiştiriyorsa güncelle, aynıysa hiçbir şey yapma
+                    if mevcut[0] == oy_turu:
+                        return False
+                    conn.execute(
+                        "UPDATE kullanici_tikla SET oy_turu=?, ts=? WHERE kullanici_id=? AND mesaj_id=?",
+                        (oy_turu, int(time.time()), int(kullanici_id), int(mesaj_id))
+                    )
+                    conn.commit()
+                    return True
+            conn.execute(
+                "INSERT INTO kullanici_tikla (ts, kullanici_id, mesaj_id, oy_turu) VALUES (?, ?, ?, ?)",
+                (int(time.time()), int(kullanici_id) if kullanici_id else None,
+                 int(mesaj_id) if mesaj_id else None, oy_turu)
+            )
+            conn.commit()
+            return True
     except Exception as e:
         log("UYARI", f"Tıklama kaydet: {e}")
         return False

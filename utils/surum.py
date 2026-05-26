@@ -12,7 +12,11 @@ veya eski bir dosya varsa admin'e NET bildirir — "şu dosya eski/eksik".
 Böylece karışık deploy artık sessiz kalmaz, anında fark edilir.
 ═══════════════════════════════════════════════════════════════════════
 """
-SURUM = "v21.4"
+try:
+    import config
+    SURUM = config.SURUM
+except Exception:
+    SURUM = "v21.5"
 
 # Her kritik modülde bulunması GEREKEN şeyler (karışık deploy tespiti).
 # (modül_yolu, [olması gereken öznitelikler])
