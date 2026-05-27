@@ -166,6 +166,15 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
     tur          = indirim_turu(metin)
     kat, ikon, _ = kategori_bul(metin)
+    # Kategori tahmini için TEMİZ ürün adını kullan — tam metindeki gürültü
+    # (#İşbirliği, Karşılaştır, fiyatlar, "Stokta var") kategoriyi şaşırtıyor.
+    # Ürün adı varsa kategori SADECE ondan belirlensin (çok daha isabetli).
+    from services.analiz import urun_adi_bul as _uab
+    _temiz_ad = (gemini or {}).get("urun_adi") or _uab(metin) or metin
+    # Temiz ad ile kategoriyi yeniden belirle (gürültüsüz → isabetli)
+    _kat2, _ikon2, _ = kategori_bul(_temiz_ad)
+    if _kat2 != "genel":
+        kat, ikon = _kat2, _ikon2
     etiket       = _ozel_etiket(metin)
     kupon        = kupon_bul(metin)
     min_sip      = min_siparis_bul(metin)
@@ -196,8 +205,10 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
             if g_alt in _ALT_IKON:
                 ikon = _ALT_IKON[g_alt]
         else:
-            ana_k, alt_k, _ = kategori_bul_tam(metin)
+            ana_k, alt_k, _ = kategori_bul_tam(_temiz_ad)
             bilgi = kategori_bilgisi(ana_k, alt_k or None)
+            if ana_k != "genel":
+                kat = ana_k
         kat_yazi = bilgi.get("yazi", config.KATEGORI_YAZI.get(kat, "Alışveriş"))
     except Exception:
         kat_yazi = config.KATEGORI_YAZI.get(kat, "Alışveriş")
@@ -297,7 +308,11 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     bl  = buton_linkleri or []
     lnk = link_bul(metin, bl)
     mag = magaza_bul(metin, lnk)
-    kat, _, kat_tags = kategori_bul(metin)
+    # Hashtag/kategori için TEMİZ ürün adı kullan (gürültü kategoriyi şaşırtmasın)
+    _temiz = (gemini or {}).get("urun_adi") or urun_adi_bul(metin) or metin
+    kat, _, kat_tags = kategori_bul(_temiz)
+    if kat == "genel":
+        kat, _, kat_tags = kategori_bul(metin)   # ad işe yaramazsa tam metne dön
     # Gemini kategori verdiyse onu kullan (daha doğru) — ikon + hashtag için
     g_kat = (gemini or {}).get("kategori", "")
     g_alt = (gemini or {}).get("alt_kategori", "")
@@ -309,9 +324,9 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
                 kat_tags = bilgi["hashtag"]
                 kat = g_kat
         else:
-            # Gemini yok → saf-Python alt kategori hashtag
+            # Gemini yok → saf-Python alt kategori hashtag (temiz addan)
             from services.analiz import kategori_bul_tam
-            ana_k, alt_k, _ = kategori_bul_tam(metin)
+            ana_k, alt_k, _ = kategori_bul_tam(_temiz)
             if alt_k:
                 alt_bilgi = kategori_bilgisi(ana_k, alt_k)
                 kat_tags = alt_bilgi.get("hashtag", kat_tags)
