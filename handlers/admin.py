@@ -51,6 +51,7 @@ _YARDIM = (
     "/topluluk — Topluluk oyları & en çok oylananlar\n"
     "/yanlis &lt;kategori&gt; — Son ürünün kategorisini düzelt (bot öğrenir)\n"
     "/hafiza — Öğrenme hafızası durumu\n"
+    "/model_sifirla — Bozuk modeli sıfırla (kategori/ürün adı düzelmezse)\n"
     "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
 )
@@ -216,6 +217,9 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/hafiza":
             await _hafiza_durum(event)
+
+        elif komut == "/model_sifirla":
+            await _model_sifirla(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -1027,3 +1031,36 @@ async def _hafiza_durum(event) -> None:
         )
     except Exception as e:
         await event.reply(f"⚠️ Hafıza durumu alınamadı: {e}", parse_mode="html")
+
+
+async def _model_sifirla(event) -> None:
+    """Zehirlenmiş/bozuk ML modellerini sıfırdan temiz eğit.
+    Diskteki bozuk model dosyalarını siler, baştan temiz eğitir.
+    'Amazon TR döngüsü' gibi model bozulmalarını kurtarır."""
+    await event.reply("🔄 Modeller sıfırlanıyor, lütfen bekleyin…", parse_mode="html")
+    import asyncio
+    loop = asyncio.get_running_loop()
+
+    def _isle():
+        sonuc = []
+        try:
+            from utils import urun_taniyici
+            urun_taniyici.sifirla()
+            sonuc.append("✅ Ürün tanıyıcı sıfırlandı")
+        except Exception as e:
+            sonuc.append(f"⚠️ Ürün tanıyıcı: {e}")
+        try:
+            from utils import ml_kategori
+            ml_kategori.sifirla()
+            sonuc.append("✅ Kategori modeli sıfırlandı")
+        except Exception as e:
+            sonuc.append(f"⚠️ Kategori modeli: {e}")
+        return sonuc
+
+    sonuc = await loop.run_in_executor(None, _isle)
+    await event.reply(
+        "🧹 <b>Model Sıfırlama Tamamlandı</b>\n\n" + "\n".join(sonuc) +
+        "\n\n<i>Modeller artık temiz. Ürün adları ve kategoriler "
+        "doğru çıkmaya başlayacak.</i>",
+        parse_mode="html",
+    )
