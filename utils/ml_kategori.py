@@ -1043,3 +1043,25 @@ def ilk_kurulum() -> None:
     log("OK", f"ML v3 hazır — {ist['toplam_ornek']} örnek, "
               f"{ist['vocab_boyut']} token, "
               f"{ist['ana_kategori_sayi']} ana + {ist['alt_grup_sayi']} alt-grup")
+
+
+def sifirla() -> None:
+    """ML kategori modelini SIFIRDAN temiz eğit.
+    Disk dosyalarını siler, otomatik öğrenilen pseudo-label'ları atar,
+    sadece orijinal (varsayılan + ml_dataset) veriyle baştan eğitir."""
+    global _yuklendi, _egitim_verisi, _kirli_sayac, _egitim_bekliyor
+    # Diskteki model + veri dosyalarını sil
+    for dosya in (_MODEL_FILE, _EGITIM_FILE):
+        try:
+            if os.path.exists(dosya):
+                os.remove(dosya)
+        except Exception as e:
+            log("UYARI", f"ML dosyası silinemedi ({dosya}): {e}")
+    # Belleği temizle
+    _egitim_verisi = []
+    _kirli_sayac = 0
+    _egitim_bekliyor = False
+    _yuklendi = False
+    # Temiz baştan eğit
+    ilk_kurulum()
+    log("OK", "ML kategori modeli SIFIRLANDI — temiz model eğitildi")

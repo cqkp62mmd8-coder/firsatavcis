@@ -421,12 +421,34 @@ def ogren_pozitif(urun_adi: str) -> None:
 
 
 def ogren_negatif(slogan: str) -> None:
-    """Reklam/slogan olarak işaretlenmiş metni negatif örnek olarak ekle."""
+    """Reklam/slogan olarak işaretlenmiş metni negatif örnek olarak ekle.
+
+    GÜVENLİK: Uzun, ürün adı/marka içerebilecek blokları negatif öğrenmek
+    modeli ZEHİRLER (gerçek ürün kelimelerini 'ürün değil' sanır → tüm
+    ürünler 'Amazon TR'ye düşer). Bu yüzden:
+      • Sadece KISA ifadeleri öğren (slogan/CTA — uzun ürün bloğu değil)
+      • Fiyat/ürün sinyali olan blokları REDDET
+    """
     global _egitim_gerekli
-    if slogan and len(slogan) >= 5:
-        _yeni_negatif.append(slogan)
-        if len(_yeni_negatif) >= 50:
-            _egitim_gerekli = True
+    if not slogan or len(slogan) < 5:
+        return
+    s = slogan.strip()
+    # Çok uzunsa (ürün bloğu olabilir) → öğrenme, riskli
+    if len(s) > 80:
+        return
+    # Birden çok satırsa (ürün + fiyat + açıklama bloğu) → öğrenme
+    if s.count("\n") >= 2:
+        return
+    # Fiyat işareti varsa (₺, TL, %) bu bir ürün/fiyat bloğu → öğrenme
+    import re as _re
+    if _re.search(r"[₺$]|\bTL\b|%\d", s):
+        return
+    _yeni_negatif.append(s)
+    # Negatif örnekler pozitiflerin yarısını GEÇMESİN (denge — zehirlenme önle)
+    if len(_yeni_negatif) > max(50, len(_yeni_pozitif) // 2):
+        _yeni_negatif.pop(0)   # en eskiyi at, dengeyi koru
+    if len(_yeni_negatif) >= 50:
+        _egitim_gerekli = True
 
 
 def egitim_gerekli_mi() -> bool:
@@ -452,6 +474,13 @@ def yeniden_egit() -> None:
     from utils.ml_dataset import EGITIM_VERISI
     pozitif = [m for m, _ in EGITIM_VERISI] + _yeni_pozitif
     negatif = list(_NEGATIF_CUMLELER) + _yeni_negatif
+    # DENGE KORUMASI: negatif örnek sayısı pozitifin yarısını geçmesin.
+    # Aksi halde model 'her şey ürün değil'e kayar (zehirlenme) → tüm
+    # ürünler 'Amazon TR'ye düşer. Bu, döngü hatasının kök çözümü.
+    azami_negatif = max(len(_NEGATIF_CUMLELER), len(pozitif) // 2)
+    if len(negatif) > azami_negatif:
+        # Sabit negatif cümleleri koru, fazla öğrenilmiş negatifi kırp
+        negatif = list(_NEGATIF_CUMLELER) + _yeni_negatif[-(azami_negatif - len(_NEGATIF_CUMLELER)):]
     _egit(pozitif, negatif)               # token modeli
     _satir_egit(pozitif, negatif)         # satır modeli (token sonrası)
     _kaydet()
@@ -528,3 +557,24 @@ def istatistik() -> dict:
         "yeni_pozitif": len(_yeni_pozitif),
         "yeni_negatif": len(_yeni_negatif),
     }
+
+
+def sifirla() -> None:
+    """Modeli SIFIRDAN temiz eğit — zehirlenmiş/bozuk modeli kurtarır.
+    Diskteki model dosyasını siler, öğrenilen negatifleri temizler,
+    orijinal eğitim verisiyle baştan eğitir."""
+    global _yuklendi, _yeni_pozitif, _yeni_negatif, _egitim_gerekli
+    # Diskteki bozuk modeli sil
+    try:
+        if os.path.exists(_MODEL_FILE):
+            os.remove(_MODEL_FILE)
+    except Exception as e:
+        log("UYARI", f"Model dosyası silinemedi: {e}")
+    # Bellekteki öğrenilenleri temizle (zehir kaynağı)
+    _yeni_pozitif = []
+    _yeni_negatif = []
+    _egitim_gerekli = False
+    _yuklendi = False
+    # Temiz baştan eğit
+    ilk_kurulum()
+    log("OK", "Ürün tanıyıcı SIFIRLANDI — temiz model eğitildi")
