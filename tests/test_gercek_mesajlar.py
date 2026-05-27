@@ -459,3 +459,56 @@ class TestUrunHafizaOgrenme:
     def test_bilinmeyen_urun_none(self):
         uh = self._hazirla()
         assert uh.hatirla("Hiç görülmemiş ürün xyz", None) is None
+
+
+class TestModelZehirlenmeKorumasi:
+    """Negatif öğrenme modeli zehirlememelі — 'Amazon TR döngüsü' kök çözümü."""
+
+    def test_urun_blogu_negatif_ogrenilmez(self):
+        from utils import urun_taniyici
+        urun_taniyici.ilk_kurulum()
+        onceki = len(urun_taniyici._yeni_negatif)
+        # Fiyat + ürün içeren blok → negatif öğrenilmemeli (zehir önleme)
+        urun_taniyici.ogren_negatif(
+            "📦 Razer Fare Altlığı 🔍 Karşılaştır ⚡️ İndirimli: ₺61")
+        assert len(urun_taniyici._yeni_negatif) == onceki  # eklenmedi
+
+    def test_kisa_slogan_ogrenilir(self):
+        from utils import urun_taniyici
+        urun_taniyici.ilk_kurulum()
+        onceki = len(urun_taniyici._yeni_negatif)
+        # Kısa, fiyatsız slogan → öğrenilebilir
+        urun_taniyici.ogren_negatif("kanala katıl çekiliş kazan")
+        assert len(urun_taniyici._yeni_negatif) > onceki
+        # Test izolasyonu: eklenen örneği geri al
+        urun_taniyici._yeni_negatif.clear()
+
+    def test_model_zehirlenmez(self):
+        from utils import urun_taniyici
+        urun_taniyici.ilk_kurulum()
+        # 100 ürün-içeren reklam → model bozulmamalı
+        for _ in range(100):
+            urun_taniyici.ogren_negatif(
+                "📦 Razer Goliathus Fare Altlığı ⚡️ ₺61")
+        # Model hala ürün adı çıkarabilmeli
+        ad = urun_taniyici.urun_adi_cikar("Razer Goliathus Oyun Fare Altlığı")
+        assert ad is not None and "Razer" in ad
+        # Test izolasyonu: diğer testleri etkilememek için modeli sıfırla
+        urun_taniyici.sifirla()
+
+
+class TestKategoriTemizAddan:
+    """Kategori tam metin gürültüsünden değil, temiz ürün adından belirlenmeli."""
+
+    def test_gaming_urunu_dogru_kategori(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kat"
+        os.makedirs("/tmp/test_kat", exist_ok=True)
+        from services import sablon
+        ham = ("📦 Razer Goliathus Oyun Fare Altlığı (uzun teknik açıklama burada)\n"
+               "🔍 Google'da Karşılaştır #İşbirliği\n⚡️ İndirimli: ₺61\n💰 Normal: ₺890")
+        s = sablon.olustur(ham, 93, ["https://amazon.com.tr/dp/B0R"])
+        assert s is not None
+        # Pet Shop / Tıbbi Cihaz OLMAMALI
+        assert "Pet Shop" not in s and "Tıbbi" not in s and "Evcil" not in s
+        assert "Amazon TR" not in s.split("\n")[2]  # ürün adı satırı site adı değil
