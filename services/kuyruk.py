@@ -33,6 +33,101 @@ def son_paylasilani_al() -> dict | None:
     return _son_paylasilan
 
 
+# ── Kuyruk Kalıcılığı (G): restart'ta bekleyen görevler kaybolmasın ──
+
+import os as _os
+import json as _json
+
+_KUYRUK_DOSYA = _os.path.join(config.DATA_DIR, "kuyruk_kalan.json")
+
+
+def kuyruk_kaydet(kuyruk) -> int:
+    """Bekleyen kuyruk öğelerini diske yaz. Bot kapanırken çağrılır.
+    Görsel byte'ları atılır (çok büyük) — restart'ta tekrar indirilir.
+    Döner: kaydedilen öğe sayısı."""
+    if kuyruk is None:
+        return 0
+    kalanlar = []
+    try:
+        while not kuyruk.empty():
+            try:
+                ogeler = kuyruk.get_nowait()
+            except Exception:
+                break
+            # Tuple yapısı: (sablon, gorsel_bytes, linkler, magaza, kat, kanal, indirim, fs)
+            try:
+                sablon, _gorsel, linkler, magaza, kat, kanal, indirim, fs = ogeler
+                kalanlar.append({
+                    "sablon":  sablon,
+                    "linkler": list(linkler) if linkler else [],
+                    "magaza":  magaza,
+                    "kat":     kat,
+                    "kanal":   kanal,
+                    "indirim": int(indirim) if indirim else 0,
+                    "fs":      float(fs) if fs else 0.0,
+                })
+            except Exception:
+                pass
+            try:
+                kuyruk.task_done()
+            except Exception:
+                pass
+        if kalanlar:
+            _os.makedirs(_os.path.dirname(_KUYRUK_DOSYA) or ".", exist_ok=True)
+            gecici = _KUYRUK_DOSYA + ".tmp"
+            with open(gecici, "w", encoding="utf-8") as f:
+                _json.dump({"ts": int(__import__("time").time()),
+                            "ogeler": kalanlar}, f, ensure_ascii=False)
+            _os.replace(gecici, _KUYRUK_DOSYA)
+            log("OK", f"Kuyruk kalıcılığı: {len(kalanlar)} bekleyen öğe diske kaydedildi")
+    except Exception as e:
+        log("UYARI", f"Kuyruk kaydet: {e}")
+    return len(kalanlar)
+
+
+def kuyruk_yukle(kuyruk) -> int:
+    """Önceki kapanışta kaydedilen görevleri kuyruğa geri yükle.
+    Bot başlangıcında çağrılır. Görsel byte'sız yüklenir (worker fallback'i
+    görsel olmadan metin gönderir). Döner: yüklenen öğe sayısı."""
+    if not _os.path.exists(_KUYRUK_DOSYA):
+        return 0
+    try:
+        with open(_KUYRUK_DOSYA, encoding="utf-8") as f:
+            veri = _json.load(f)
+        ogeler = veri.get("ogeler", [])
+        kac_saat_once = (int(__import__("time").time()) - veri.get("ts", 0)) / 3600
+        # 12 saatten eski görevleri yükleme (bayatlamış fırsat)
+        if kac_saat_once > 12:
+            log("BILGI", f"Kuyruk kalıcılığı: {len(ogeler)} öğe çok eski "
+                          f"({kac_saat_once:.1f}h) — atlandı")
+            try: _os.remove(_KUYRUK_DOSYA)
+            except Exception: pass
+            return 0
+        yuklendi = 0
+        for o in ogeler:
+            try:
+                kuyruk.put_nowait((
+                    o["sablon"], None,   # gorsel_bytes None → worker metin olarak gönderir
+                    o.get("linkler", []),
+                    o.get("magaza", ""),
+                    o.get("kat", "genel"),
+                    o.get("kanal", ""),
+                    o.get("indirim", 0),
+                    o.get("fs", 0.0),
+                ))
+                yuklendi += 1
+            except Exception:
+                break   # kuyruk doldu
+        if yuklendi:
+            log("OK", f"Kuyruk kalıcılığı: {yuklendi} bekleyen öğe geri yüklendi")
+        try: _os.remove(_KUYRUK_DOSYA)
+        except Exception: pass
+        return yuklendi
+    except Exception as e:
+        log("UYARI", f"Kuyruk yükle: {e}")
+        return 0
+
+
 def _aktif_bekleme() -> int:
     """#12 — Spike modu: yoğun saatlerde bekleme süresini kısalt.
     - Cuma akşamı 18-23 → KUYRUK_BEKLEME / 2
@@ -245,6 +340,37 @@ async def worker(
                     global _son_paylasilan
                     _son_paylasilan = {"urun": ad, "link": lnk, "kategori": kat,
                                        "mesaj_id": msg.id}
+                    # v22: Duplicate engelleme için bu paylaşımı kalıcı işaretle
+                    try:
+                        from utils import duplicate
+                        tum_linkler = link if isinstance(link, list) else [link] if link else []
+                        if lnk and lnk not in tum_linkler:
+                            tum_linkler = tum_linkler + [lnk]
+                        duplicate.kaydet(tum_linkler, ad, kat, magaza, msg.id)
+                    except Exception:
+                        pass
+                    # v22: Self-healing izleme — model bozulmasını yakala
+                    # v22.1: HER PAYLAŞIMDA anlık kontrol — döngü beklemesin
+                    try:
+                        from utils import self_heal
+                        self_heal.kayit_ekle(kat)
+                        # Anlık onarım denemesi (bozuk değilse hiçbir şey yapmaz)
+                        sonuc = self_heal.otomatik_onar()
+                        if sonuc and sonuc.get("onarildi"):
+                            tetik = sonuc.get("tetik") or {}
+                            log("KRITIK", f"Self-heal anlık tetik: "
+                                          f"'{tetik.get('kategori')}' "
+                                          f"{tetik.get('tekrar')} kez tekrar etmişti")
+                    except Exception:
+                        pass
+                    # v22: Akıllı özet için mesaj_id'yi günlüğe iliştir
+                    try:
+                        from schedulers import gunluk as _gun
+                        ilk_link = (link[0] if isinstance(link, list) and link else link) or lnk
+                        if ilk_link:
+                            _gun.mesaj_id_ilistir(ilk_link, msg.id)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 

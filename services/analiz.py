@@ -5,6 +5,7 @@ Saf fonksiyonlar — dış bağımlılık yok (config hariç).
 import hashlib
 import re
 import unicodedata
+import functools
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
@@ -400,13 +401,58 @@ _KAMPANYA_KALIP = re.compile(
 _URUN_BAS = re.compile(r"^[🔥🔻📦👚🎯💡🛍✅⚡🎁⭐🆕💎🏆]", re.UNICODE)
 
 
+# ═══════════════════════════════════════════════════════════════
+# v22.2 — P3: MESAJ-BAZLI ÖNBELLEK
+# Aynı mesaj birkaç fonksiyon tarafından paralel çağrılıyor olabilir
+# (urun_adi_bul, kategori_bul, kategori_bul_tam). Mesajın hash'iyle
+# sonuçları cache'le — aynı mesaj için tek hesap.
+# ═══════════════════════════════════════════════════════════════
+
+_mesaj_cache: dict = {}
+_MESAJ_CACHE_MAX = 1024
+
+
+def _mesaj_anahtar(metin: str, fonk_adi: str) -> tuple:
+    """Mesaj-fonk anahtarı. İlk 300 karakter yeter (çoğu mesaj kısa)."""
+    return (fonk_adi, (metin or "")[:300])
+
+
+def _cache_al(metin: str, fonk_adi: str):
+    """Cache'ten al, yoksa None."""
+    return _mesaj_cache.get(_mesaj_anahtar(metin, fonk_adi))
+
+
+def _cache_koy(metin: str, fonk_adi: str, sonuc) -> None:
+    """Cache'e ekle, FIFO eviction."""
+    if len(_mesaj_cache) >= _MESAJ_CACHE_MAX:
+        # En eski 128'i at
+        for k in list(_mesaj_cache.keys())[:128]:
+            del _mesaj_cache[k]
+    _mesaj_cache[_mesaj_anahtar(metin, fonk_adi)] = sonuc
+
+
 def urun_adi_bul(metin: str) -> str | None:
-    """Mesajdan ürün adını çıkarır.
+    """Mesajdan ürün adını çıkarır. v22.2: cache eklendi (P3).
 
     BİRİNCİL: öğrenen model (utils.urun_taniyici) — her kelimeyi
     ÜRÜN/FILLER olarak sınıflandırır, slogan/dolgu cümlelerini eler.
     YEDEK: model yüklenemezse aşağıdaki yapısal yöntem devreye girer.
     """
+    if not metin:
+        return None
+    # Cache kontrol
+    onbellek = _cache_al(metin, "urun_adi")
+    if onbellek is not None:
+        # onbellek (None,) tuple olarak saklanırsa "yok" demek
+        return onbellek if onbellek != "__NONE__" else None
+
+    sonuc = _urun_adi_bul_hesapla(metin)
+    _cache_koy(metin, "urun_adi", sonuc if sonuc is not None else "__NONE__")
+    return sonuc
+
+
+def _urun_adi_bul_hesapla(metin: str) -> str | None:
+    """urun_adi_bul'un asıl gövdesi (cache MISS yolu)."""
     if not metin:
         return None
 
@@ -748,6 +794,7 @@ _REF_PARAMS = {
 }
 
 
+@functools.lru_cache(maxsize=2048)
 def urun_kimligi(url: str) -> str:
     """URL'den ürün kimliği çıkar. Aynı ürünün farklı linkleri (farklı
     affiliate tag, ref param) aynı kimliği döner. İki FARKLI ürün ise
@@ -755,6 +802,9 @@ def urun_kimligi(url: str) -> str:
 
     Kullanım: bir mesajda toplanan linklerin kaç farklı ürüne ait
     olduğunu tespit etmek için.
+
+    NOT: Saf fonksiyon (sadece url'ye bağlı) → LRU cache ile hızlandırıldı.
+    1000+ mesajda aynı linkler tekrar geldiğinde yeniden hesaplanmaz.
     """
     if not url:
         return ""
