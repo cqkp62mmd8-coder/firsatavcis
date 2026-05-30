@@ -52,6 +52,10 @@ _YARDIM = (
     "/yanlis &lt;kategori&gt; — Son ürünün kategorisini düzelt (bot öğrenir)\n"
     "/hafiza — Öğrenme hafızası durumu\n"
     "/model_sifirla — Bozuk modeli sıfırla (kategori/ürün adı düzelmezse)\n"
+    "/saglik — Botun tüm durumu (kuyruk, model, hafıza, oylar)\n"
+    "/performans — Performans metrikleri (cache, kuyruk hızı)\n"
+    "/bakim — DB temizliği elle çalıştır\n"
+    "/yedekle — DB'nin yedek bilgisi\n"
     "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
 )
@@ -220,6 +224,18 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/model_sifirla":
             await _model_sifirla(event)
+
+        elif komut == "/saglik":
+            await _saglik_panosu(event)
+
+        elif komut == "/bakim":
+            await _bakim_calistir(event)
+
+        elif komut == "/yedekle":
+            await _yedek_al(event)
+
+        elif komut == "/performans":
+            await _performans_panosu(event)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -1064,3 +1080,238 @@ async def _model_sifirla(event) -> None:
         "doğru çıkmaya başlayacak.</i>",
         parse_mode="html",
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v22: ALTYAPI ADMİN KOMUTLARI
+# ═══════════════════════════════════════════════════════════════════
+
+async def _saglik_panosu(event) -> None:
+    """Botun tüm sağlık durumunu tek bakışta göster.
+    Sistem, model, hafıza, oylar, duplicate, self-heal — hepsi."""
+    import time
+    satirlar = ["🩺 <b>BOT SAĞLIK PANOSU</b>", ""]
+
+    # Sistem
+    try:
+        from utils import surum
+        satirlar.append(f"🏷️ Sürüm: <code>{surum.SURUM}</code>")
+    except Exception:
+        pass
+    try:
+        import psutil, os as _os
+        proc = psutil.Process(_os.getpid())
+        bellek_mb = proc.memory_info().rss / 1024 / 1024
+        cpu = proc.cpu_percent(interval=0.1)
+        satirlar.append(f"💻 Bellek: {bellek_mb:.0f} MB | CPU: %{cpu:.0f}")
+    except Exception:
+        pass
+
+    # Veritabanı
+    try:
+        from utils import bakim
+        boyut = bakim.db_boyut()
+        if boyut:
+            satirlar.append(f"💾 DB: {boyut.get('dosya_mb', 0)} MB")
+    except Exception:
+        pass
+
+    # Model durumu
+    try:
+        from utils import urun_taniyici, ml_kategori
+        ut_ist = urun_taniyici.istatistik()
+        mlk_ist = ml_kategori.istatistik() if hasattr(ml_kategori, "istatistik") else {}
+        satirlar.append(
+            f"🧠 Ürün model: {ut_ist.get('ozellik_sayisi', 0)} özellik | "
+            f"Negatif: {ut_ist.get('yeni_negatif', 0)}"
+        )
+        if mlk_ist:
+            satirlar.append(
+                f"📊 ML kategori: {mlk_ist.get('toplam_ornek', '?')} örnek, "
+                f"{mlk_ist.get('ana_kategori_sayi', '?')} ana kategori"
+            )
+    except Exception:
+        pass
+
+    # Hafıza
+    try:
+        from utils import urun_hafiza
+        h = urun_hafiza.istatistik()
+        satirlar.append(
+            f"📦 Hafıza: {h['toplam_urun']} ürün, "
+            f"{h['ogrenilen_marka']} marka, "
+            f"{h['tekrar_eden']} tekrar"
+        )
+    except Exception:
+        pass
+
+    # Self-healing
+    try:
+        from utils import self_heal
+        sh = self_heal.durum()
+        durum = "✅ normal" if not sh["bozuk_mu"] else "⚠️ BOZUK"
+        satirlar.append(f"🔧 Self-healing: {durum} (izlenen {sh['izlenen_son']}/{sh['esik']})")
+    except Exception:
+        pass
+
+    # Duplicate
+    try:
+        from utils import duplicate
+        d = duplicate.istatistik()
+        satirlar.append(
+            f"🚫 Duplicate: {d['toplam_kayit']} kayıt, "
+            f"son 24h: {d['son_24_saat']} (engelleme: {d['engelleme_gun']} gün)"
+        )
+    except Exception:
+        pass
+
+    # Oylar
+    try:
+        from utils import segment
+        ozet = segment.oy_ozeti(gun=1)
+        if ozet and ozet.get("toplam", 0) > 0:
+            oran = ozet["iyi"] / max(1, ozet["toplam"]) * 100
+            satirlar.append(
+                f"👍 Bugün oylar: 🔥{ozet['iyi']} ❌{ozet['sahte']} "
+                f"(kalite: %{oran:.0f})"
+            )
+    except Exception:
+        pass
+
+    # Gemini durumu
+    try:
+        from utils import gemini
+        if hasattr(gemini, "durum"):
+            g = gemini.durum()
+            satirlar.append(f"🤖 Gemini: {g}")
+        elif gemini.kullanilabilir():
+            satirlar.append("🤖 Gemini: ✅ aktif")
+        else:
+            satirlar.append("🤖 Gemini: ⚠️ kapalı/kotada")
+    except Exception:
+        pass
+
+    # Config uyarıları
+    try:
+        if config._config_uyarilari:
+            satirlar.append("")
+            satirlar.append("⚠️ <b>Config Uyarıları:</b>")
+            for u in config._config_uyarilari[:5]:
+                satirlar.append(f"  • <code>{u}</code>")
+    except Exception:
+        pass
+
+    await event.reply("\n".join(satirlar), parse_mode="html")
+
+
+async def _bakim_calistir(event) -> None:
+    """DB bakımını elle çalıştır — eski kayıtları temizle."""
+    await event.reply("🧹 DB bakımı başlatıldı, lütfen bekleyin…", parse_mode="html")
+    import asyncio
+    loop = asyncio.get_running_loop()
+    try:
+        from utils import bakim
+        sonuc = await loop.run_in_executor(None, bakim.bakim_yap, True)
+        boyut = await loop.run_in_executor(None, bakim.db_boyut)
+        satirlar = ["✅ <b>Bakım Tamamlandı</b>", ""]
+        for k, v in sonuc.items():
+            if k != "vacuum":
+                satirlar.append(f"  • {k}: {v} kayıt silindi")
+        if sonuc.get("vacuum"):
+            satirlar.append("  • VACUUM: ✓ dosya sıkıştırıldı")
+        satirlar.append("")
+        satirlar.append(f"💾 Şu an DB boyutu: {boyut.get('dosya_mb', 0)} MB")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Bakım hatası: {e}", parse_mode="html")
+
+
+async def _yedek_al(event) -> None:
+    """DB yedek durumunu göster (cache.gunluk_yedek arka planda zaten çalışıyor)."""
+    try:
+        from utils import db, bakim
+        import os as _os
+        from datetime import datetime
+        boyut = bakim.db_boyut()
+        yol = getattr(db, "DB_FILE", None)
+        satirlar = ["💾 <b>Veritabanı Yedek Bilgisi</b>", ""]
+        if yol and _os.path.exists(yol):
+            mod_ts = _os.path.getmtime(yol)
+            satirlar.append(f"📁 Dosya: <code>{yol}</code>")
+            satirlar.append(f"📏 Boyut: {boyut.get('dosya_mb', 0)} MB")
+            satirlar.append(f"🕐 Son değişiklik: {datetime.fromtimestamp(mod_ts).strftime('%Y-%m-%d %H:%M')}")
+        satirlar.append("")
+        satirlar.append("📊 <b>Tablo İstatistikleri:</b>")
+        for tablo in ("urun_hafiza", "paylasim_kayit", "gorulmus", "metrik"):
+            n = boyut.get(tablo, "?")
+            satirlar.append(f"  • {tablo}: {n} kayıt")
+        satirlar.append("")
+        satirlar.append("<i>Günlük otomatik yedek mekanizması aktif "
+                        "(cache.gunluk_yedek görevi).</i>")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Yedek bilgisi alınamadı: {e}", parse_mode="html")
+
+
+async def _performans_panosu(event) -> None:
+    """Performans metrikleri — cache, kuyruk, hız."""
+    satirlar = ["⚡ <b>PERFORMANS PANOSU</b>", ""]
+
+    # LRU cache durumu
+    try:
+        from services.analiz import urun_kimligi
+        ci = urun_kimligi.cache_info()
+        hit_orani = (ci.hits / max(1, ci.hits + ci.misses)) * 100
+        satirlar.append(
+            f"📦 URL kimlik cache: {ci.currsize}/{ci.maxsize}\n"
+            f"   Hit: {ci.hits:,} | Miss: {ci.misses:,} | Oran: %{hit_orani:.1f}"
+        )
+    except Exception:
+        pass
+
+    # ML cache (varsa)
+    try:
+        from utils import ml_kategori
+        if hasattr(ml_kategori, "tahmin") and hasattr(ml_kategori.tahmin, "cache_info"):
+            ci = ml_kategori.tahmin.cache_info()
+            satirlar.append(f"🧠 ML tahmin cache: {ci.currsize} kayıt")
+    except Exception:
+        pass
+
+    # Worker bekleme süresi
+    try:
+        from services.kuyruk import _bekleme_carpani_aktif
+        carpan = _bekleme_carpani_aktif()
+        gecerli_bekleme = config.KUYRUK_BEKLEME * carpan
+        if carpan != 1.0:
+            satirlar.append(
+                f"⏱️ Kuyruk bekleme: {gecerli_bekleme:.0f}s "
+                f"(çarpan: ×{carpan:.2f} — spike modu)"
+            )
+        else:
+            satirlar.append(f"⏱️ Kuyruk bekleme: {config.KUYRUK_BEKLEME}s")
+    except Exception:
+        pass
+
+    # Bellek
+    try:
+        import psutil, os as _os
+        proc = psutil.Process(_os.getpid())
+        bellek_mb = proc.memory_info().rss / 1024 / 1024
+        satirlar.append(f"💻 Bellek: {bellek_mb:.0f} MB")
+    except Exception:
+        pass
+
+    # Trafik istatistikleri
+    try:
+        from utils import cache
+        ist = cache._ist_oku("paylasildi", {}) or {}
+        if ist:
+            from datetime import datetime
+            bugun = datetime.now().strftime("%Y-%m-%d")
+            bugun_say = ist.get(bugun, 0) if isinstance(ist, dict) else 0
+            satirlar.append(f"📤 Bugün paylaşılan: {bugun_say}")
+    except Exception:
+        pass
+
+    await event.reply("\n".join(satirlar), parse_mode="html")

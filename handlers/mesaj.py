@@ -455,6 +455,16 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 sablon = sablon_olustur(a["blok"], a["indirim"], [a["link"]], gemini=a.get("gemini"))
                 if not sablon:
                     return
+                # v22: Duplicate kontrol — son N gün içinde aynı ürün paylaşıldıysa atla
+                try:
+                    from utils import duplicate
+                    onceki = duplicate.daha_once_paylasildi_mi([a["link"]])
+                    if onceki:
+                        log("BILGI", f"Duplicate atlandı: '{(onceki.get('urun') or '')[:40]}' "
+                                      f"{onceki['kac_saat']}h önce paylaşıldı")
+                        return
+                except Exception:
+                    pass
                 gunluk_ekle(a["blok"], a["indirim"], [a["link"]], (a.get("gemini") or {}).get("kalite", 0))
                 try:
                     kuyruk.put_nowait((
@@ -482,6 +492,17 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
 
             gunluk_ekle(a1["blok"], a1["indirim"], [a1["link"]], (a1.get("gemini") or {}).get("kalite", 0))
             gunluk_ekle(a2["blok"], a2["indirim"], [a2["link"]], (a2.get("gemini") or {}).get("kalite", 0))
+
+            # v22: Çoklu üründe de duplicate kontrolü — her iki link de yeni olmalı
+            try:
+                from utils import duplicate
+                onceki = duplicate.daha_once_paylasildi_mi([a1["link"], a2["link"]])
+                if onceki:
+                    log("BILGI", f"Çoklu duplicate atlandı: bir ürün "
+                                  f"{onceki['kac_saat']}h önce paylaşıldı")
+                    return
+            except Exception:
+                pass
 
             try:
                 kuyruk.put_nowait((
