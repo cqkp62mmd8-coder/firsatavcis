@@ -41,12 +41,20 @@ def _signal_handler():
 
 
 async def _graceful_bekle(kuyruk: asyncio.Queue, max_saniye: int = 30) -> None:
-    """Kuyruğun boşalmasını bekler (max N saniye)."""
+    """Kuyruğun boşalmasını bekler (max N saniye).
+    v22: Süre dolarsa kalan görevleri diske kaydet — restart'ta geri yüklenir."""
     log("SISTEM", f"Kuyruğun boşalması bekleniyor (max {max_saniye}s)…")
     son_zaman = asyncio.get_event_loop().time() + max_saniye
     while kuyruk.qsize() > 0:
         if asyncio.get_event_loop().time() > son_zaman:
-            log("UYARI", f"Süre aşıldı, {kuyruk.qsize()} mesaj kayıp")
+            # KAYIP DEĞİL — diske yaz, restart'ta geri yüklensin
+            try:
+                from services import kuyruk as kuyruk_mod
+                kaydedildi = kuyruk_mod.kuyruk_kaydet(kuyruk)
+                log("SISTEM", f"Süre aşıldı, {kaydedildi} mesaj diske kaydedildi "
+                              f"(restart'ta geri yüklenecek)")
+            except Exception as e:
+                log("UYARI", f"Kuyruk kalıcılığı: {e}")
             break
         await asyncio.sleep(1)
     # Cache'i son bir kez kaydet
@@ -87,6 +95,56 @@ async def _gunluk_bakim() -> None:
             segment.temizle_eski(gun=180)
         except Exception:
             pass
+
+
+async def _db_bakim_dongusu() -> None:
+    """v22: Periyodik DB temizliği — Railway diski dolmasın.
+    Eski oylar, mesaj metaları, az görülen ürün hafızası temizlenir."""
+    import asyncio as _asyncio
+    if config.DB_BAKIM_SAAT <= 0:
+        log("BILGI", "DB bakımı kapalı (DB_BAKIM_SAAT=0)")
+        return
+    # Bot açılırken hemen değil, ilk saatten sonra başlasın
+    await _asyncio.sleep(3600)
+    while True:
+        try:
+            from utils import bakim
+            loop = _asyncio.get_running_loop()
+            await loop.run_in_executor(None, bakim.bakim_yap)
+        except Exception as e:
+            log("UYARI", f"DB bakım: {e}")
+        await _asyncio.sleep(config.DB_BAKIM_SAAT * 3600)
+
+
+async def _self_heal_dongusu() -> None:
+    """v22: Model bozulmasını periyodik kontrol et, gerekirse otomatik sıfırla.
+    v22.1: 2 dakikada bir kontrol (eski: 15 dk) — hızlı tepki için."""
+    import asyncio as _asyncio
+    if not config.MODEL_IZLEME_AKTIF:
+        log("BILGI", "Self-healing kapalı (MODEL_IZLEME_AKTIF=0)")
+        return
+    # İlk 5 dakika beklensin (bot açılışında model normal yükleniyor)
+    await _asyncio.sleep(300)
+    while True:
+        try:
+            from utils import self_heal
+            sonuc = self_heal.otomatik_onar()
+            if sonuc and sonuc.get("onarildi"):
+                try:
+                    from client import client as _tg_client
+                    from utils import izleme
+                    tetik = sonuc.get("tetik") or {}
+                    await izleme.kritik_uyari(
+                        _tg_client,
+                        f"🔧 Self-Healing: Model bozulmuştu "
+                        f"(son {tetik.get('tekrar')} paylaşım "
+                        f"'{tetik.get('kategori')}'). Otomatik sıfırlandı."
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            log("UYARI", f"Self-heal döngü: {e}")
+        await _asyncio.sleep(120)   # v22.1: 2 dakikada bir (eski 15 dk)
 
 
 # ── Başlangıç doğrulaması ────────────────────────────────────────
@@ -310,6 +368,15 @@ async def main() -> None:
 
     kuyruk: asyncio.Queue = asyncio.Queue(maxsize=50)
 
+    # v22: Önceki kapanışta bekleyen görevleri geri yükle (kayıp önleme)
+    try:
+        from services import kuyruk as kuyruk_mod
+        yuklenen = kuyruk_mod.kuyruk_yukle(kuyruk)
+        if yuklenen:
+            log("OK", f"Restart sonrası {yuklenen} bekleyen görev geri yüklendi")
+    except Exception as e:
+        log("UYARI", f"Kuyruk geri yükleme: {e}")
+
     while True:
         try:
             await tg.client.start()
@@ -376,6 +443,8 @@ async def main() -> None:
                 "stok_takip":    lambda: stok_takip.kontrol_dongusu(tg.client),
                 "gunluk_yedek":  lambda: cache.gunluk_yedek(),
                 "gunluk_bakim":  lambda: _gunluk_bakim(),
+                "db_bakim":      lambda: _db_bakim_dongusu(),
+                "self_heal":     lambda: _self_heal_dongusu(),
                 "model_egitim":  lambda: _model_egitim_dongusu(),
                 "health":        lambda: health.baslat(kuyruk, port=_port),
             }

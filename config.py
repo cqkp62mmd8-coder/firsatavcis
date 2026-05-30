@@ -4,13 +4,46 @@ Başka hiçbir dosya os.environ'a dokunmaz.
 """
 import os
 
+# ── Güvenli env okuma — bozuk değerde çökme, varsayılana düş + uyar ──
+_config_uyarilari: list[str] = []
+
+
+def _int_env(anahtar: str, varsayilan: int, min_d: int | None = None,
+             max_d: int | None = None) -> int:
+    """Ortam değişkenini güvenle int'e çevir. Bozuksa varsayılan + uyarı."""
+    ham = os.environ.get(anahtar)
+    if ham is None or ham == "":
+        return varsayilan
+    try:
+        deger = int(str(ham).strip())
+    except (ValueError, TypeError):
+        _config_uyarilari.append(
+            f"{anahtar}='{ham}' geçersiz (sayı bekleniyor) → {varsayilan} kullanıldı")
+        return varsayilan
+    # Mantıklı aralık kontrolü
+    if min_d is not None and deger < min_d:
+        _config_uyarilari.append(f"{anahtar}={deger} çok düşük → {min_d} kullanıldı")
+        return min_d
+    if max_d is not None and deger > max_d:
+        _config_uyarilari.append(f"{anahtar}={deger} çok yüksek → {max_d} kullanıldı")
+        return max_d
+    return deger
+
+
+def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
+    """Ortam değişkenini güvenle bool'a çevir. '1', 'true', 'evet' → True."""
+    ham = os.environ.get(anahtar)
+    if ham is None or ham == "":
+        return varsayilan
+    return str(ham).strip().lower() in ("1", "true", "yes", "evet", "on")
+
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v21.9-2026.05.27"   # Model zehirlenme korumasi + kategori temiz-addan (Amazon TR dongusu cozuldu)
+SURUM = "v22.2-2026.05.30"   # Performans: model %48 küçüldü, tahmin cache 1750x, urun_adi cache
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
-API_ID         = int(os.environ.get("API_ID", "0"))
+API_ID         = _int_env("API_ID", 0)
 API_HASH       = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
@@ -18,10 +51,10 @@ HEDEF_KANAL    = os.environ.get("CHANNEL_ID", "")
 ADMIN_ID       = os.environ.get("ADMIN_ID", "")
 
 # ── Filtre eşikleri ──────────────────────────────────────────────
-MIN_INDIRIM    = int(os.environ.get("MIN_INDIRIM", "20"))
-MIN_KALITE     = int(os.environ.get("MIN_KALITE", "15"))
-KUYRUK_BEKLEME = int(os.environ.get("KUYRUK_BEKLEME", "180"))
-TEST_MODE      = os.environ.get("TEST_MODE", "0") == "1"
+MIN_INDIRIM    = _int_env("MIN_INDIRIM", 20, min_d=0, max_d=99)
+MIN_KALITE     = _int_env("MIN_KALITE", 15, min_d=0, max_d=100)
+KUYRUK_BEKLEME = _int_env("KUYRUK_BEKLEME", 180, min_d=0, max_d=86400)
+TEST_MODE      = _bool_env("TEST_MODE", False)
 
 # ── Sistem ───────────────────────────────────────────────────────
 DATA_DIR         = os.environ.get("DATA_DIR") or ("/data" if os.path.exists("/data") else ".")
@@ -31,16 +64,28 @@ LOGO_DOSYA       = "logo.PNG"
 GORULMUS_MAX     = 3_000
 GORULMUS_TTL     = 7 * 24 * 3_600   # saniye
 WATCHDOG_ARALIK  = 3_600             # saniye
-MARKA_SPAM_LIMIT = int(os.environ.get("MARKA_SPAM_LIMIT", "999"))   # 999 = pratik olarak devre dışı
+MARKA_SPAM_LIMIT = _int_env("MARKA_SPAM_LIMIT", 999, min_d=1)   # 999 = pratik olarak devre dışı
 MARKA_SPAM_SURE  = 3_600            # saniye
-KUPON_MIN_TL     = int(os.environ.get("KUPON_MIN_TL", "500"))  # Bu TL'nin üstündeki kuponlar geçer
+KUPON_MIN_TL     = _int_env("KUPON_MIN_TL", 500, min_d=0)  # Bu TL'nin üstündeki kuponlar geçer
 
 # ── Yeni özellik bayrakları ─────────────────────────────────────
-QR_KOD_AKTIF        = os.environ.get("QR_KOD_AKTIF", "1") == "1"
-SPIKE_MODU_AKTIF    = os.environ.get("SPIKE_MODU_AKTIF", "1") == "1"
-ESKI_MESAJ_LIMIT_DK = int(os.environ.get("ESKI_MESAJ_LIMIT_DK", "180"))   # Bu dakikadan eskiyse atla
-STOK_KONTROL_SAAT   = int(os.environ.get("STOK_KONTROL_SAAT", "6"))       # 0 = devre dışı
-MIN_GORSEL_BOYUT    = int(os.environ.get("MIN_GORSEL_BOYUT", "400"))     # Bu altındaki görsellere logo ekleme
+QR_KOD_AKTIF        = _bool_env("QR_KOD_AKTIF", True)
+SPIKE_MODU_AKTIF    = _bool_env("SPIKE_MODU_AKTIF", True)
+ESKI_MESAJ_LIMIT_DK = _int_env("ESKI_MESAJ_LIMIT_DK", 180, min_d=1)   # Bu dakikadan eskiyse atla
+STOK_KONTROL_SAAT   = _int_env("STOK_KONTROL_SAAT", 6, min_d=0)       # 0 = devre dışı
+MIN_GORSEL_BOYUT    = _int_env("MIN_GORSEL_BOYUT", 400, min_d=0)     # Bu altındaki görsellere logo ekleme
+
+# ── Duplicate engelleme (v22) ───────────────────────────────────
+DUPLICATE_GUN       = _int_env("DUPLICATE_GUN", 3, min_d=0, max_d=90)  # Aynı ürün bu kadar gün içinde tekrar paylaşılmaz (0=kapalı)
+
+# ── Otomatik DB bakımı (v22) ────────────────────────────────────
+DB_BAKIM_SAAT       = _int_env("DB_BAKIM_SAAT", 24, min_d=0)          # Kaç saatte bir temizlik (0=kapalı)
+OY_SAKLAMA_GUN      = _int_env("OY_SAKLAMA_GUN", 60, min_d=1)         # Oylar bu kadar gün saklanır
+HAFIZA_SAKLAMA_GUN  = _int_env("HAFIZA_SAKLAMA_GUN", 120, min_d=1)    # Ürün hafızası bu kadar gün saklanır
+
+# ── Self-healing model izleme (v22) ─────────────────────────────
+MODEL_IZLEME_AKTIF  = _bool_env("MODEL_IZLEME_AKTIF", True)           # Model bozulursa otomatik sıfırla
+MODEL_TEKRAR_ESIK   = _int_env("MODEL_TEKRAR_ESIK", 5, min_d=3)       # Son N paylaşım aynı kategoriyse → bozuk (v22.1: 15→5)
 
 # ── Kara liste ───────────────────────────────────────────────────
 KARA_LISTE = [
