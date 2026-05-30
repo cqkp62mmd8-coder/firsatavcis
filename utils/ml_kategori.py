@@ -53,6 +53,11 @@ _OTO_MAX = 2000                  # en fazla otomatik (pseudo-label) örnek
 _son_egitim_zaman: float = 0.0
 _yuklendi: bool = False
 
+# v22.2 — P1: TTL cache için model nesli. Her eğitim/sıfırlama'da artar,
+# cache anahtarı bu nesle bağlı → model değişince eski sonuçlar otomatik
+# miss olur (geçersiz kılınmaya gerek yok).
+_model_nesli: int = 0
+
 # Aşamalı sınıflandırma:
 #  1) Ana kategori için tek bir model (Naive Bayes + LogReg ensemble)
 #  2) Her ana kategori için kendi alt-kategori modeli
@@ -478,6 +483,8 @@ def _modeli_egit() -> None:
     """Hiyerarşik iki aşamalı eğitim:
       Aşama 1: Tüm ana kategoriler için tek bir ensemble model
       Aşama 2: Her ana kategori için ayrı bir alt-kategori modeli
+
+    v22.2: Eğitim sonunda model nesli artırılır → tahmin cache otomatik geçersiz.
     """
     global _ana_nb_priors, _ana_nb_skorlar, _ana_nb_token_toplam
     global _ana_lr_agirliklar, _ana_lr_bias, _ana_kategoriler
@@ -557,14 +564,34 @@ def tahmin(metin: str) -> tuple[str, float]:
     return ana, guv
 
 
-def tahmin_hiyerarsik(metin: str) -> tuple[str, str, float]:
-    """İki aşamalı tahmin:
-      1) Ana kategoriyi belirle (ensemble NB+LR)
-      2) O ana kategori için alt-kategoriyi belirle (eğer alt modeli varsa)
+# v22.2 — P1: Tahmin cache
+_tahmin_cache: dict = {}
+_TAHMIN_CACHE_MAX = 2048
 
-    Döner: (ana, alt, güven) — alt yoksa '' döner.
-    Güven = (ana güveni) × (alt güveni)
-    """
+
+def _cache_anahtar(metin: str) -> tuple:
+    """(model nesli, normalize metin) — model değişince eski cache otomatik miss olur."""
+    return (_model_nesli, (metin or "")[:200].strip().lower())
+
+
+def tahmin_hiyerarsik(metin: str) -> tuple[str, str, float]:
+    """İki aşamalı tahmin (ana + alt kategori). v22.2: TTL cache eklendi."""
+    if not metin:
+        return "genel", "", 0.0
+    anahtar = _cache_anahtar(metin)
+    onbellek = _tahmin_cache.get(anahtar)
+    if onbellek is not None:
+        return onbellek
+    sonuc = _tahmin_hiyerarsik_hesapla(metin)
+    if len(_tahmin_cache) >= _TAHMIN_CACHE_MAX:
+        for k in list(_tahmin_cache.keys())[:256]:
+            del _tahmin_cache[k]
+    _tahmin_cache[anahtar] = sonuc
+    return sonuc
+
+
+def _tahmin_hiyerarsik_hesapla(metin: str) -> tuple[str, str, float]:
+    """İki aşamalı tahmin hesaplaması (cache MISS yolu)."""
     if not _yuklendi:
         ilk_kurulum()
     if not _ana_nb_priors:
@@ -911,28 +938,125 @@ def _veri_kaydet() -> None:
         log("UYARI", f"v3 veri kaydet: {e}")
 
 
+def _kompakt_sozluk(d: dict, hassasiyet: int = 4) -> tuple[dict, float]:
+    """v22.2 — Skor sözlüğünü sıkıştır:
+    1. En sık görülen değer 'default' olarak ayrılır
+    2. Sadece default'tan farklı değerler saklanır (sparse)
+    3. Float'lar `hassasiyet` ondalığa yuvarlanır
+
+    Döner: (sparse_dict, default_deger). Yükleme tersine işler.
+    """
+    if not d:
+        return {}, 0.0
+    # En sık değeri bul
+    from collections import Counter
+    yuvarlali = {k: round(float(v), hassasiyet) for k, v in d.items()}
+    sayim = Counter(yuvarlali.values())
+    default_deger = sayim.most_common(1)[0][0]
+    # Sadece default DEĞİL olanları sakla
+    sparse = {k: v for k, v in yuvarlali.items() if v != default_deger}
+    return sparse, default_deger
+
+
+def _genisle_sozluk(sparse: dict, default: float, anahtarlar: list) -> dict:
+    """Sparse sözlüğü tam sözlüğe geri aç (yükleme)."""
+    sonuc = {}
+    for k in anahtarlar:
+        sonuc[k] = sparse.get(k, default)
+    return sonuc
+
+
+def _alt_model_kompakt(m: dict) -> dict:
+    """v22.2 — Alt model sözlüklerini sparse formatta kaydet."""
+    nb = dict(m["nb"])   # kopya
+    # nb içindeki skor sözlüklerini sıkıştır
+    if "skorlar" in nb and isinstance(nb["skorlar"], dict):
+        nb_sparse = {}
+        for kat, sozluk in nb["skorlar"].items():
+            if isinstance(sozluk, dict) and sozluk:
+                s, d = _kompakt_sozluk(sozluk, hassasiyet=4)
+                nb_sparse[kat] = {"_default": d, "_data": s}
+            else:
+                nb_sparse[kat] = sozluk
+        nb["skorlar"] = nb_sparse
+    nb["vocab"] = list(nb.get("vocab", []))
+
+    lr = dict(m["lr"])
+    # lr.agirliklar sözlüklerini sıkıştır
+    if "agirliklar" in lr and isinstance(lr["agirliklar"], dict):
+        lr_sparse = {}
+        for kat, sozluk in lr["agirliklar"].items():
+            if isinstance(sozluk, dict) and sozluk:
+                s, d = _kompakt_sozluk(sozluk, hassasiyet=5)
+                lr_sparse[kat] = {"_default": d, "_data": s}
+            else:
+                lr_sparse[kat] = sozluk
+        lr["agirliklar"] = lr_sparse
+
+    return {"kategoriler": m["kategoriler"], "nb": nb, "lr": lr}
+
+
+def _alt_model_genislet(m: dict, vocab_listesi: list) -> dict:
+    """Alt modelin sparse formatını geri aç (yükleme)."""
+    nb = dict(m["nb"])
+    if "skorlar" in nb and isinstance(nb["skorlar"], dict):
+        nb_full = {}
+        for kat, sparse_d in nb["skorlar"].items():
+            if isinstance(sparse_d, dict) and "_default" in sparse_d:
+                nb_full[kat] = _genisle_sozluk(
+                    sparse_d["_data"], sparse_d["_default"], vocab_listesi
+                )
+            else:
+                nb_full[kat] = sparse_d
+        nb["skorlar"] = nb_full
+    nb["vocab"] = set(nb.get("vocab", []))
+
+    lr = dict(m["lr"])
+    if "agirliklar" in lr and isinstance(lr["agirliklar"], dict):
+        lr_full = {}
+        for kat, sparse_d in lr["agirliklar"].items():
+            if isinstance(sparse_d, dict) and "_default" in sparse_d:
+                lr_full[kat] = _genisle_sozluk(
+                    sparse_d["_data"], sparse_d["_default"], vocab_listesi
+                )
+            else:
+                lr_full[kat] = sparse_d
+        lr["agirliklar"] = lr_full
+
+    return {"kategoriler": m["kategoriler"], "nb": nb, "lr": lr}
+
+
 def _model_kaydet() -> None:
     try:
         os.makedirs(os.path.dirname(_MODEL_FILE) or ".", exist_ok=True)
         gecici = _MODEL_FILE + ".tmp"
+
+        # v22.2 — SPARSE + LOW-PRECISION KAYIT (32MB → ~3-5MB)
+        nb_skorlar_sparse = {}
+        for kat, sozluk in _ana_nb_skorlar.items():
+            sparse, default = _kompakt_sozluk(sozluk, hassasiyet=4)
+            nb_skorlar_sparse[kat] = {"_default": default, "_data": sparse}
+
+        lr_agirlik_sparse = {}
+        for kat, sozluk in _ana_lr_agirliklar.items():
+            sparse, default = _kompakt_sozluk(sozluk, hassasiyet=5)
+            lr_agirlik_sparse[kat] = {"_default": default, "_data": sparse}
+
         data = {
             "version": MODEL_VERSION,
+            "format_v": 2,   # v22.2: sparse format
             "guncellendi": simdi_tr().isoformat(),
             "ana_kategoriler":      _ana_kategoriler,
-            "ana_nb_priors":        _ana_nb_priors,
-            "ana_nb_skorlar":       _ana_nb_skorlar,
+            "ana_nb_priors":        {k: round(v, 6) for k, v in _ana_nb_priors.items()},
+            "ana_nb_skorlar":       nb_skorlar_sparse,    # SPARSE
             "ana_nb_token_toplam":  _ana_nb_token_toplam,
-            "ana_lr_agirliklar":    _ana_lr_agirliklar,
-            "ana_lr_bias":          _ana_lr_bias,
+            "ana_lr_agirliklar":    lr_agirlik_sparse,    # SPARSE
+            "ana_lr_bias":          {k: round(v, 6) for k, v in _ana_lr_bias.items()},
             "ana_prototipler":      _ana_prototipler,
-            "idf":                  _idf,
+            "idf":                  {k: round(v, 4) for k, v in _idf.items()},
             "vocab":                list(_vocab),
             "alt_modeller":         {
-                ana_kat: {
-                    "kategoriler": m["kategoriler"],
-                    "nb": {**m["nb"], "vocab": list(m["nb"]["vocab"])},
-                    "lr": m["lr"],
-                }
+                ana_kat: _alt_model_kompakt(m)
                 for ana_kat, m in _alt_modeller.items()
             },
             "alt_prototipler":      _alt_prototipler,
@@ -940,6 +1064,9 @@ def _model_kaydet() -> None:
         with open(gecici, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(gecici, _MODEL_FILE)
+        # v22.2 — P1: Model değişti → tahmin cache otomatik geçersiz
+        global _model_nesli
+        _model_nesli += 1
     except Exception as e:
         log("UYARI", f"v3 model kaydet: {e}")
 
@@ -978,14 +1105,33 @@ def _model_yukle() -> bool:
         _ana_prototipler     = data.get("ana_prototipler", {})
         _idf                 = data["idf"]
         _vocab               = set(data["vocab"])
-        _alt_modeller        = {
-            ana_kat: {
-                "kategoriler": m["kategoriler"],
-                "nb": {**m["nb"], "vocab": set(m["nb"]["vocab"])},
-                "lr": m["lr"],
-            }
-            for ana_kat, m in data.get("alt_modeller", {}).items()
-        }
+
+        # v22.2 — Sparse formatı (format_v=2) tanı ve aç
+        if data.get("format_v") == 2:
+            tum_tokenler = list(_vocab)
+            for kat, sparse_d in list(_ana_nb_skorlar.items()):
+                if isinstance(sparse_d, dict) and "_default" in sparse_d:
+                    _ana_nb_skorlar[kat] = _genisle_sozluk(
+                        sparse_d["_data"], sparse_d["_default"], tum_tokenler
+                    )
+            for kat, sparse_d in list(_ana_lr_agirliklar.items()):
+                if isinstance(sparse_d, dict) and "_default" in sparse_d:
+                    _ana_lr_agirliklar[kat] = _genisle_sozluk(
+                        sparse_d["_data"], sparse_d["_default"], tum_tokenler
+                    )
+
+        _alt_modeller        = {}
+        for ana_kat, m in data.get("alt_modeller", {}).items():
+            if data.get("format_v") == 2:
+                # Alt modelin kendi vocab'i (sparse açma için)
+                alt_vocab = list(m.get("nb", {}).get("vocab", []))
+                _alt_modeller[ana_kat] = _alt_model_genislet(m, alt_vocab)
+            else:
+                _alt_modeller[ana_kat] = {
+                    "kategoriler": m["kategoriler"],
+                    "nb": {**m["nb"], "vocab": set(m["nb"]["vocab"])},
+                    "lr": m["lr"],
+                }
         _alt_prototipler     = data.get("alt_prototipler", {})
         _yuklendi = True
         return True
@@ -1062,6 +1208,10 @@ def sifirla() -> None:
     _kirli_sayac = 0
     _egitim_bekliyor = False
     _yuklendi = False
+    # v22.2 — P1: Cache'i temizle, nesli artır
+    global _model_nesli
+    _model_nesli += 1
+    _tahmin_cache.clear()
     # Temiz baştan eğit
     ilk_kurulum()
     log("OK", "ML kategori modeli SIFIRLANDI — temiz model eğitildi")

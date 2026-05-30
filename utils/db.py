@@ -94,6 +94,32 @@ CREATE TABLE IF NOT EXISTS backup_meta (
     anahtar TEXT PRIMARY KEY,
     deger   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS paylasim_kayit (
+    kimlik      TEXT PRIMARY KEY,
+    urun_adi    TEXT,
+    kategori    TEXT,
+    magaza      TEXT,
+    mesaj_id    INTEGER,
+    ts          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_paylasim_ts ON paylasim_kayit(ts);
+
+CREATE TABLE IF NOT EXISTS urun_hafiza (
+    kimlik     TEXT PRIMARY KEY,
+    urun_adi   TEXT,
+    kategori   TEXT,
+    gorulme    INTEGER DEFAULT 1,
+    ts         INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_hafiza_ts ON urun_hafiza(ts);
+
+CREATE TABLE IF NOT EXISTS marka_kategori (
+    marka      TEXT,
+    kategori   TEXT,
+    sayi       INTEGER DEFAULT 1,
+    PRIMARY KEY (marka, kategori)
+);
 """
 
 
