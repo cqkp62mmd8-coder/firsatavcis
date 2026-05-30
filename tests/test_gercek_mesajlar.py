@@ -512,3 +512,195 @@ class TestKategoriTemizAddan:
         # Pet Shop / Tıbbi Cihaz OLMAMALI
         assert "Pet Shop" not in s and "Tıbbi" not in s and "Evcil" not in s
         assert "Amazon TR" not in s.split("\n")[2]  # ürün adı satırı site adı değil
+
+
+class TestV22Altyapi:
+    """v22 altyapı: güvenli config, DB bakımı, retry, duplicate, self-heal."""
+
+    def test_bozuk_env_cokmesin(self):
+        """D: Bozuk env değişkeni varsayılana düşmeli, çökmemeli."""
+        import config
+        # Modülde fonksiyon var
+        assert hasattr(config, "_int_env")
+        # Geçersiz değer testi
+        import os
+        eski = os.environ.get("TEST_INT")
+        os.environ["TEST_INT"] = "abc"
+        try:
+            v = config._int_env("TEST_INT", 42)
+            assert v == 42   # bozuksa varsayılana düştü
+        finally:
+            if eski is None:
+                os.environ.pop("TEST_INT", None)
+            else:
+                os.environ["TEST_INT"] = eski
+
+    def test_duplicate_engelleme(self):
+        """1: Aynı ürün ikinci kez engelleniyor."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_dup_v22"
+        os.makedirs("/tmp/test_dup_v22", exist_ok=True)
+        from utils import db; db.init()
+        from utils import duplicate
+        # Temiz başla
+        try:
+            with db.cursor() as c:
+                c.execute("DELETE FROM paylasim_kayit")
+        except Exception:
+            pass
+        link = "https://amazon.com.tr/dp/B0DUP12345"
+        # Önce yok
+        assert duplicate.daha_once_paylasildi_mi([link]) is None
+        # Kaydet
+        duplicate.kaydet([link], "Test", "elektronik", "Amazon", 1)
+        # Şimdi var
+        assert duplicate.daha_once_paylasildi_mi([link]) is not None
+
+    def test_self_heal_bozuk_tespit(self):
+        """7: Aynı kategori tekrarı bozulma tespit etmeli."""
+        from utils import self_heal
+        self_heal._son_kategoriler.clear()
+        # 15 kez aynı (genel hariç) kategori → bozuk
+        for _ in range(20):
+            self_heal.kayit_ekle("yanlis:kategori")
+        assert self_heal.bozuk_mu() is not None
+        self_heal._son_kategoriler.clear()
+
+    def test_self_heal_normal_durum_temiz(self):
+        """7: Çeşitli kategori varsa bozuk dememeli."""
+        from utils import self_heal
+        self_heal._son_kategoriler.clear()
+        for k in ("elektronik", "giyim", "ev", "kozmetik") * 5:
+            self_heal.kayit_ekle(k)
+        assert self_heal.bozuk_mu() is None
+        self_heal._son_kategoriler.clear()
+
+    def test_bakim_calisir(self):
+        """B: Bakım modülü hata vermeden çalışmalı."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_bakim_v22"
+        os.makedirs("/tmp/test_bakim_v22", exist_ok=True)
+        from utils import db; db.init()
+        from utils import bakim
+        sonuc = bakim.bakim_yap(zorla=True)
+        assert isinstance(sonuc, dict)
+        boyut = bakim.db_boyut()
+        assert isinstance(boyut, dict)
+
+    def test_kuyruk_persistence(self):
+        """G: Kuyruk diske yazılıp geri yüklenebilmeli (telethon stubsız test)."""
+        import asyncio, os, sys
+        # Stub yolu PYTHONPATH'te yoksa testi atla
+        try:
+            import telethon  # noqa
+        except ImportError:
+            return   # telethon stub yok, bu testi atla
+        os.environ["DATA_DIR"] = "/tmp/test_kalan_v22"
+        os.makedirs("/tmp/test_kalan_v22", exist_ok=True)
+        import importlib, config as _c
+        _c.DATA_DIR = "/tmp/test_kalan_v22"
+        from services import kuyruk
+        importlib.reload(kuyruk)
+        async def t():
+            q = asyncio.Queue(maxsize=5)
+            q.put_nowait(("<b>X</b>", b"img", ["http://x.com/1"], "Amazon", "ev", "k", 30, 50.0))
+            n = kuyruk.kuyruk_kaydet(q)
+            assert n == 1
+            q2 = asyncio.Queue(maxsize=5)
+            m = kuyruk.kuyruk_yukle(q2)
+            assert m == 1
+            return True
+        assert asyncio.run(t())
+
+    def test_retry_kalici_hata_vazgec(self):
+        """F: Kalıcı hatada retry vazgeçmeli."""
+        import asyncio
+        from utils.retry import deneyerek
+
+        async def kalici():
+            raise TypeError("kod hatası")
+
+        async def main():
+            try:
+                await deneyerek(kalici, max_deneme=5, baslangic_bekleme=0.01)
+                return False
+            except TypeError:
+                return True
+
+        assert asyncio.run(main())
+
+
+class TestV22Performans:
+    """v22.2 performans iyileştirmeleri: cache + sparse model."""
+
+    def test_kategori_cache_hizli(self):
+        """P1: kategori_bul cache hit anlık olmalı."""
+        import time, os
+        os.environ["DATA_DIR"] = "/tmp/test_perf_cache"
+        os.makedirs("/tmp/test_perf_cache", exist_ok=True)
+        from utils import ml_kategori
+        ml_kategori.ilk_kurulum()
+        # Cache'i ısıt
+        ml_kategori.tahmin_hiyerarsik("iPhone 15 telefon")
+        # 1000 cache hit
+        t = time.time()
+        for _ in range(1000):
+            ml_kategori.tahmin_hiyerarsik("iPhone 15 telefon")
+        sure = time.time() - t
+        # Cache hit halinde 1000 çağrı < 100ms olmalı (gerçekte ~1ms)
+        assert sure < 0.1, f"Cache çok yavaş: {sure*1000:.0f}ms"
+
+    def test_urun_adi_cache(self):
+        """P3: urun_adi_bul aynı mesaj için cache'li olmalı."""
+        import time
+        from services.analiz import urun_adi_bul, _mesaj_cache
+        _mesaj_cache.clear()
+        m = "Apple AirPods Pro 2 4990 TL"
+        # İlk çağrı (slow)
+        urun_adi_bul(m)
+        # 1000 cache hit
+        t = time.time()
+        for _ in range(1000):
+            urun_adi_bul(m)
+        sure = time.time() - t
+        assert sure < 0.1, f"Cache hit çok yavaş: {sure*1000:.0f}ms"
+
+    def test_sparse_model_kucuk(self):
+        """P2: Model sparse formatta kaydedilince küçük olmalı."""
+        import os, json, importlib
+        os.environ["DATA_DIR"] = "/tmp/test_sparse"
+        os.makedirs("/tmp/test_sparse", exist_ok=True)
+        yol = "/tmp/test_sparse/ml_model_v3.json"
+        if os.path.exists(yol):
+            os.remove(yol)
+        # ml_kategori'yi taze yükle ki MODEL_FILE doğru yola işaret etsin
+        from utils import ml_kategori
+        ml_kategori._MODEL_FILE = yol
+        ml_kategori._EGITIM_FILE = "/tmp/test_sparse/ml_egitim_v3.json"
+        ml_kategori._yuklendi = False
+        ml_kategori._egitim_verisi = []
+        ml_kategori.ilk_kurulum()
+        assert os.path.exists(yol)
+        boyut_mb = os.path.getsize(yol) / 1024 / 1024
+        assert boyut_mb < 25, f"Model çok büyük: {boyut_mb:.1f}MB"
+        with open(yol) as f:
+            data = json.load(f)
+        assert data.get("format_v") == 2
+
+    def test_model_degisince_cache_temizlenir(self):
+        """P1: Model sıfırlanınca tahmin cache geçersiz olmalı."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_invalidate"
+        os.makedirs("/tmp/test_invalidate", exist_ok=True)
+        from utils import ml_kategori
+        ml_kategori.ilk_kurulum()
+        # Cache'e bir şey ekle
+        ml_kategori.tahmin_hiyerarsik("test ürün")
+        assert len(ml_kategori._tahmin_cache) > 0
+        # Sıfırla
+        eski_nesil = ml_kategori._model_nesli
+        ml_kategori.sifirla()
+        # Nesil artmış olmalı
+        assert ml_kategori._model_nesli > eski_nesil
+        # Cache temiz olmalı
+        assert len(ml_kategori._tahmin_cache) == 0
