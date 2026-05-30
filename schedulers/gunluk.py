@@ -49,12 +49,51 @@ def liste() -> list[dict]:
     return list(_urunler)
 
 
+def mesaj_id_ilistir(link: str, mesaj_id: int) -> None:
+    """v22: Gönderim sonrası mesaj_id'yi link'e göre eşleştir.
+    Akıllı özet bu sayede her ürünün oy verisini bulabilir."""
+    if not link or not mesaj_id:
+        return
+    for u in _urunler:
+        if u.get("link") == link and not u.get("mesaj_id"):
+            u["mesaj_id"] = mesaj_id
+            return
+
+
 async def gonder(client: TelegramClient) -> None:
     if not _urunler:
         log("BILGI", "21:00 – paylaşılacak ürün yok")
         return
+
+    # v22 — AKILLI ÖZET: Kalite skorunu kullanıcı oylarıyla zenginleştir.
+    # 🔥 oyu skoru yukarı çeker, ❌ oyu aşağı iter. Gerçekten "en iyi" olanlar
+    # — sadece algoritmik kalite değil, kullanıcıların da beğendikleri — seçilir.
+    try:
+        from utils import segment
+        oy_bonusu_aldi = 0
+        for u in _urunler:
+            mid = u.get("mesaj_id")
+            if mid:
+                iyi, kotu = segment.oy_sayilari(mid)
+                if iyi or kotu:
+                    # Oy bonusu: her 🔥 +2 skor, her ❌ -3 skor (sahte daha sert)
+                    u["skor"] = float(u.get("skor", 0)) + (iyi * 2.0) - (kotu * 3.0)
+                    u["_oy"] = (iyi, kotu)
+                    oy_bonusu_aldi += 1
+        if oy_bonusu_aldi:
+            _urunler.sort(key=lambda x: (x["skor"], x["indirim"]), reverse=True)
+            log("BILGI", f"Akıllı özet: {oy_bonusu_aldi} ürün için oy bonusu uygulandı")
+        # Genel kanal sağlığı bilgisi
+        ozet = segment.oy_ozeti(gun=1)
+        if ozet and ozet.get("toplam", 0) > 0:
+            kalite_orani = ozet["iyi"] / max(1, ozet["toplam"])
+            log("BILGI", f"Bugün oy oranı: %{kalite_orani*100:.0f} "
+                          f"(🔥{ozet['iyi']} ❌{ozet['sahte']})")
+    except Exception as e:
+        log("UYARI", f"Akıllı özet oy entegrasyonu: {e}")
+
     en_iyi = _urunler[:3]
-    log("BILGI", f"21:00 – {len(en_iyi)} ürün gönderiliyor")
+    log("BILGI", f"21:00 – {len(en_iyi)} ürün gönderiliyor (akıllı sıralama)")
 
     # Başlık: Gemini varsa o günün ürünlerine göre taze/çekici bir alt başlık
     alt_baslik = "Bugün yakalanan en yüksek skorlu ürünler:"
