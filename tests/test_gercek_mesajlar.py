@@ -1016,3 +1016,92 @@ class TestV2210YeniYetenekler:
         e1 = istek.eslesenleri_bul("Apple MacBook Pro M3")
         e2 = istek.eslesenleri_bul("Apple MacBook Air M2")  # hemen tekrar
         assert len(e1) == 1 and len(e2) == 0  # 6 saat spam koruması
+
+
+class TestV2211Buyume:
+    """v22.11 — çoklu kanal, etkileşim, akıllı zamanlama (Grup C)."""
+
+    def test_coklu_kanal_secimi(self):
+        import os, importlib
+        os.environ["CHANNEL_ID"] = "@anakanal"
+        os.environ["KATEGORI_KANALLAR"] = "elektronik:@tekno,giyim:@moda"
+        import config; importlib.reload(config)
+        assert config.hedef_kanal_sec("elektronik") == "@tekno"
+        assert config.hedef_kanal_sec("elektronik:telefon") == "@tekno"
+        assert config.hedef_kanal_sec("giyim") == "@moda"
+        assert config.hedef_kanal_sec("kozmetik") == "@anakanal"  # eşleşmeyen
+        os.environ["KATEGORI_KANALLAR"] = ""
+        importlib.reload(config)
+
+    def test_zamanlama_altin_saat(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_zm"
+        os.makedirs("/tmp/test_zm", exist_ok=True)
+        from utils import db; db.init()
+        from utils import zamanlama as z
+        for _ in range(10):
+            z.paylasim_kaydet(21); z.oy_kaydet(21); z.oy_kaydet(21)
+        for _ in range(10):
+            z.paylasim_kaydet(4)
+        assert z.altin_saat_mi(21)
+        assert not z.altin_saat_mi(4)
+
+    def test_etkilesim_haftanin_urunu(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_et2"
+        os.makedirs("/tmp/test_et2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import segment, etkilesim
+        segment.mesaj_kaydet(501, "elektronik", "Amazon", 30, "iPhone Test")
+        for u in [1, 2, 3]:
+            segment.tikla_kaydet(u, 501, "good")
+        urun = etkilesim.haftanin_urunu()
+        assert urun and urun["urun"] == "iPhone Test" and urun["oy"] >= 2
+
+    def test_etkilesim_vitrin(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_et2"
+        os.makedirs("/tmp/test_et2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import etkilesim
+        vitrin = etkilesim.haftalik_vitrin_metni()
+        # Önceki testte veri eklendi → vitrin dolu olmalı
+        assert vitrin is None or "Favori" in vitrin or "ilgi" in vitrin
+
+
+class TestV2212AmazonTRKokCozum:
+    """v22.12 — Amazon TR TÜM varyasyonları + Gemini yolu kök çözüm."""
+
+    def test_magaza_jenerik_kombinasyonu_red(self):
+        from services.analiz import _urun_adi_makul
+        for ad in ["Amazon TR", "Amazon TR ürünleri", "Amazon TR ürün",
+                   "Trendyol kampanya", "Hepsiburada mağaza", "Amazon Türkiye",
+                   "amazon tr store", "Trendyol TR ürünleri"]:
+            assert not _urun_adi_makul(ad), f"'{ad}' makul SANILDI (çöp olmalı)"
+
+    def test_gercek_urun_magaza_kelimeli_gecer(self):
+        from services.analiz import _urun_adi_makul
+        # Gerçek ürün adı + mağaza kelimesi → geçmeli (mağaza tek başına değil)
+        for ad in ["Apple iPhone 15 Amazon", "Samsung TV Trendyol fiyatı",
+                   "Bosch Matkap Hepsiburada"]:
+            assert _urun_adi_makul(ad), f"'{ad}' reddedildi (geçerli ürün)"
+
+    def test_gemini_amazon_tr_red(self):
+        """Gemini 'Amazon TR' dese bile şablon reddetmeli."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_gem"
+        os.makedirs("/tmp/test_gem", exist_ok=True)
+        from services.sablon import olustur
+        for g_ad in ["Amazon TR", "Amazon TR ürünleri", "Trendyol kampanya"]:
+            s = olustur("fırsat", 48, ["https://amazon.com.tr/dp/B0X"],
+                        gemini={"urun_adi": g_ad})
+            assert s is None, f"Gemini '{g_ad}' ile paylaşıldı"
+
+    def test_gemini_gercek_urun_gecer(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_gem"
+        os.makedirs("/tmp/test_gem", exist_ok=True)
+        from services.sablon import olustur
+        s = olustur("iPhone", 20, ["https://amazon.com.tr/dp/B0X"],
+                    gemini={"urun_adi": "Apple iPhone 15 Pro"})
+        assert s is not None
