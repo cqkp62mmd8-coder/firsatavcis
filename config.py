@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v22.10-2026.05.31"   # Yeni yetenekler: fiyat takip, stok geri-gelme, kullanici istek, akilli rozet
+SURUM = "v22.12-2026.06.01"   # KOK COZUM: Amazon TR tum varyasyonlari (magaza+jenerik) + Gemini yolu makul kontrolu
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
@@ -48,6 +48,39 @@ API_HASH       = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
 HEDEF_KANAL    = os.environ.get("CHANNEL_ID", "")
+
+# ── Çoklu kanal altyapısı (v22.11 — Sistem 8) ───────────────────
+# İkinci kanalını açınca, kategori bazlı dağıtım yapabilirsin.
+# Format: "elektronik:@teknokanal,giyim:@modakanal,kozmetik:@guzellik"
+# Boşsa → tek kanal modu (HEDEF_KANAL). Eşleşmeyen kategori → HEDEF_KANAL.
+KATEGORI_KANALLAR = os.environ.get("KATEGORI_KANALLAR", "")
+
+
+def _kategori_kanal_parse(ham: str) -> dict:
+    """'elektronik:@kanal1,giyim:@kanal2' → {'elektronik': '@kanal1', ...}"""
+    sonuc = {}
+    if not ham:
+        return sonuc
+    for parca in ham.split(","):
+        if ":" in parca:
+            kat, kanal = parca.split(":", 1)
+            kat, kanal = kat.strip().lower(), kanal.strip()
+            if kat and kanal:
+                sonuc[kat] = kanal
+    return sonuc
+
+
+KATEGORI_KANAL_HARITASI = _kategori_kanal_parse(KATEGORI_KANALLAR)
+
+
+def hedef_kanal_sec(kategori: str = "") -> str:
+    """Bir kategori için hangi kanala paylaşılacağını döndür.
+    Çoklu kanal tanımlıysa kategoriye göre, yoksa varsayılan HEDEF_KANAL."""
+    if KATEGORI_KANAL_HARITASI and kategori:
+        ana_kat = kategori.split(":")[0].strip().lower()
+        if ana_kat in KATEGORI_KANAL_HARITASI:
+            return KATEGORI_KANAL_HARITASI[ana_kat]
+    return HEDEF_KANAL
 ADMIN_ID       = os.environ.get("ADMIN_ID", "")
 
 # ── Filtre eşikleri ──────────────────────────────────────────────
