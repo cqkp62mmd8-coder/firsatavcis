@@ -35,6 +35,20 @@ def kaydet(bot_client: TelegramClient) -> None:
             except Exception as e:
                 log("UYARI", f"Tıklama segment kaydı: {e}")
 
+            # v22.7 — Sistem 8: A/B test oyunu işle (hangi şablon stili daha iyi)
+            if yeni_oy and mesaj_id:
+                try:
+                    from utils import ab_test
+                    ab_test.oy_kaydet(mesaj_id, oy_turu == "good")
+                except Exception:
+                    pass
+                # Kara kutuya oy olayını kaydet
+                try:
+                    from utils import karakutu
+                    karakutu.kaydet("mesaj", f"Oy: {oy_turu} (msg {mesaj_id})")
+                except Exception:
+                    pass
+
             # Kullanıcıya geri bildirim
             if not yeni_oy:
                 await event.answer("Zaten oy verdin 👍", alert=False)

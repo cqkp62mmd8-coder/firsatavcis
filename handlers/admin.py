@@ -56,6 +56,16 @@ _YARDIM = (
     "/performans — Performans metrikleri (cache, kuyruk hızı)\n"
     "/bakim — DB temizliği elle çalıştır\n"
     "/yedekle — DB'nin yedek bilgisi\n"
+    "/karne — Kalite karne (paylaşım puanları)\n"
+    "/karakutu — Son olaylar (hata teşhisi)\n"
+    "/sozluk — Öğrenilen kelime sözlüğü\n"
+    "/abtest — Şablon A/B test sonuçları\n"
+    "/karantina — Onay bekleyen paylaşımlar\n"
+    "/onayla &lt;id&gt; — Karantinadakini paylaş\n"
+    "/reddet &lt;id&gt; — Karantinadakini ele\n"
+    "/istekler — Kullanıcı istekleri (Sistem 6)\n"
+    "/fiyat_takip — Fiyat izleme durumu\n"
+    "/rapor_kart — Günlük performans kartı\n"
     "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
 )
@@ -236,6 +246,36 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/performans":
             await _performans_panosu(event)
+
+        elif komut == "/karne":
+            await _karne_panosu(event)
+
+        elif komut == "/karakutu":
+            await _karakutu_panosu(event)
+
+        elif komut == "/sozluk":
+            await _sozluk_panosu(event)
+
+        elif komut == "/rapor_kart":
+            await _gunluk_rapor_kart(event)
+
+        elif komut == "/abtest":
+            await _abtest_panosu(event)
+
+        elif komut == "/karantina":
+            await _karantina_panosu(event)
+
+        elif komut == "/istekler":
+            await _istekler_panosu(event)
+
+        elif komut == "/fiyat_takip":
+            await _fiyat_takip_panosu(event)
+
+        elif komut.startswith("/onayla"):
+            await _karantina_karar(event, komut, onayla=True)
+
+        elif komut.startswith("/reddet"):
+            await _karantina_karar(event, komut, onayla=False)
 
         # Bilinmeyen komutlar sessizce yok sayılır
 
@@ -953,13 +993,15 @@ def kaydet(
         # ── Bot client: bota gelen mesajlarda çalışır ──────────────
         @bot_client.on(events.NewMessage(func=lambda e: e.is_private))
         async def _bot_admin(event):
-            # Sadece admin'den gelen mesajlar
             sender = await event.get_sender()
-            if not sender or sender.id != admin_id:
+            metin = (event.message.text or "").strip()
+            # Admin komutları
+            if sender and sender.id == admin_id and metin.startswith("/"):
+                await _komut_isle(event, kuyruk)
                 return
-            if not (event.message.text or "").startswith("/"):
-                return
-            await _komut_isle(event, kuyruk)
+            # v22.10 — Sistem 6: Admin olmayan kullanıcıların istek komutları
+            if sender:
+                await _kullanici_istek_isle(event, sender.id, metin)
 
         log("OK", "Admin handler: bot üzerinden aktif — bota /yardim yaz")
 
@@ -1315,3 +1357,289 @@ async def _performans_panosu(event) -> None:
         pass
 
     await event.reply("\n".join(satirlar), parse_mode="html")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v22.7 — BÜYÜK GÜNCELLEME ADMİN KOMUTLARI
+# ═══════════════════════════════════════════════════════════════════
+
+async def _karne_panosu(event) -> None:
+    """Sistem 3: Kalite karne istatistikleri."""
+    try:
+        from utils import kalite
+        ist = kalite.istatistik()
+        if ist["toplam"] == 0:
+            await event.reply("📋 Henüz kalite karnesi yok (paylaşım bekleniyor).",
+                              parse_mode="html")
+            return
+        await event.reply(
+            f"📋 <b>KALİTE KARNESİ</b>\n\n"
+            f"📊 Değerlendirilen: {ist['toplam']} paylaşım\n"
+            f"⭐ Ortalama puan: {ist['ortalama']}/100\n"
+            f"🟢 Yüksek (≥75): {ist['yuksek']}\n"
+            f"🔴 Düşük (<50): {ist['dusuk']}\n"
+            f"📈 En yüksek: {ist.get('en_yuksek', '?')}\n"
+            f"📉 En düşük: {ist.get('en_dusuk', '?')}",
+            parse_mode="html",
+        )
+    except Exception as e:
+        await event.reply(f"⚠️ Karne alınamadı: {e}", parse_mode="html")
+
+
+async def _karakutu_panosu(event) -> None:
+    """Sistem 7: Kara kutu — son olaylar."""
+    try:
+        from utils import karakutu
+        ozet = karakutu.ozet()
+        metin = karakutu.formatla(15)
+        bas = f"📦 <b>KARA KUTU</b> ({ozet.get('toplam', 0)} olay)\n"
+        if ozet.get("son_hata"):
+            bas += f"❌ Son hata: {ozet['son_hata']['zaman']} — {ozet['son_hata']['detay'][:40]}\n"
+        bas += "\n<code>" + metin + "</code>"
+        await event.reply(bas, parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Kara kutu alınamadı: {e}", parse_mode="html")
+
+
+async def _sozluk_panosu(event) -> None:
+    """Sistem 6: Kelime sözlüğü durumu."""
+    try:
+        from utils import sozluk
+        ist = sozluk.istatistik()
+        en_sik = "\n".join(f"  • {k}: {s}" for k, s in ist.get("en_sik", []))
+        await event.reply(
+            f"📖 <b>KELİME SÖZLÜĞÜ</b>\n\n"
+            f"📝 Toplam kelime: {ist['toplam_kelime']}\n"
+            f"💪 Güçlü kelime (≥3): {ist['guclu_kelime']}\n\n"
+            f"En sık öğrenilenler:\n{en_sik or '  (henüz yok)'}",
+            parse_mode="html",
+        )
+    except Exception as e:
+        await event.reply(f"⚠️ Sözlük alınamadı: {e}", parse_mode="html")
+
+
+async def _gunluk_rapor_kart(event) -> None:
+    """Sistem 12: Günlük performans rapor kartı."""
+    try:
+        satirlar = ["📊 <b>GÜNLÜK PERFORMANS KARTI</b>", ""]
+        # Paylaşım + duplicate
+        try:
+            from utils import duplicate
+            d = duplicate.istatistik()
+            satirlar.append(f"📤 Son 24h paylaşım kaydı: {d['son_24_saat']}")
+        except Exception:
+            pass
+        # Kalite
+        try:
+            from utils import kalite
+            k = kalite.istatistik()
+            if k["toplam"]:
+                satirlar.append(f"⭐ Ortalama kalite: {k['ortalama']}/100")
+        except Exception:
+            pass
+        # Oylar
+        try:
+            from utils import segment
+            o = segment.oy_ozeti(gun=1)
+            if o and o.get("toplam", 0) > 0:
+                satirlar.append(f"👍 Oylar: 🔥{o['iyi']} ❌{o['sahte']}")
+        except Exception:
+            pass
+        # Hafıza / öğrenme
+        try:
+            from utils import urun_hafiza, sozluk
+            h = urun_hafiza.istatistik()
+            s = sozluk.istatistik()
+            satirlar.append(f"🧠 Öğrenilen: {h['ogrenilen_marka']} marka, "
+                          f"{s['toplam_kelime']} kelime")
+        except Exception:
+            pass
+        # Gemini
+        try:
+            from utils import gemini
+            g = gemini.istatistik()
+            satirlar.append(f"🤖 Gemini: {g['basari']}/{g['istek']} başarılı")
+        except Exception:
+            pass
+        # Self-heal
+        try:
+            from utils import self_heal
+            sh = self_heal.durum()
+            durum = "✅ normal" if not sh["bozuk_mu"] else "⚠️ bozuk"
+            satirlar.append(f"🔧 Model: {durum}")
+        except Exception:
+            pass
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Rapor kartı alınamadı: {e}", parse_mode="html")
+
+
+async def _abtest_panosu(event) -> None:
+    """Sistem 8: A/B şablon testi sonuçları."""
+    try:
+        from utils import ab_test
+        ist = ab_test.istatistik()
+        if not ist["stiller"]:
+            await event.reply("🧪 A/B testi henüz veri toplamadı.", parse_mode="html")
+            return
+        satirlar = ["🧪 <b>A/B ŞABLON TESTİ</b>", ""]
+        for s in ist["stiller"]:
+            satirlar.append(
+                f"Stil {s['stil']}: {s['gosterim']} gösterim · "
+                f"🔥{s['iyi']} ❌{s['kotu']} · %{s['basari']} başarı"
+            )
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ A/B test alınamadı: {e}", parse_mode="html")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v22.9 — Sistem 3: KARANTİNA ADMİN KOMUTLARI
+# ═══════════════════════════════════════════════════════════════════
+
+async def _karantina_panosu(event) -> None:
+    """Bekleyen karantina öğelerini listele."""
+    try:
+        from utils import karantina
+        bekleyen = karantina.bekleyenler()
+        if not bekleyen:
+            await event.reply("✅ Karantina boş — bekleyen paylaşım yok.",
+                              parse_mode="html")
+            return
+        satirlar = [f"🔍 <b>KARANTİNA</b> ({len(bekleyen)} bekliyor)", ""]
+        for b in bekleyen:
+            satirlar.append(
+                f"<b>#{b['id']}</b> ({b['puan']}/100) {b['magaza']}\n"
+                f"   {b['urun']}\n"
+                f"   /onayla {b['id']}  ·  /reddet {b['id']}"
+            )
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Karantina alınamadı: {e}", parse_mode="html")
+
+
+async def _karantina_karar(event, komut: str, onayla: bool) -> None:
+    """Karantinadaki bir öğeyi onayla (paylaş) veya reddet (ele)."""
+    try:
+        from utils import karantina
+        full = (event.message.text or "").strip()
+        parcalar = full.split()
+        if len(parcalar) < 2 or not parcalar[1].isdigit():
+            await event.reply("Kullanım: /onayla &lt;id&gt; veya /reddet &lt;id&gt;",
+                              parse_mode="html")
+            return
+        kid = int(parcalar[1])
+        oge = karantina.al(kid)
+        if not oge:
+            await event.reply(f"⚠️ #{kid} karantinada bulunamadı (süresi dolmuş olabilir).",
+                              parse_mode="html")
+            return
+        if not onayla:
+            karantina.cikar(kid)
+            await event.reply(f"🗑️ #{kid} reddedildi, paylaşılmadı.", parse_mode="html")
+            return
+        # Onaylandı → kanala paylaş
+        karantina.cikar(kid)
+        try:
+            client = event.client
+            gorsel = oge.get("gorsel")
+            if gorsel:
+                import io
+                bio = io.BytesIO(gorsel); bio.name = "urun.jpg"
+                msg = await client.send_file(oge["kanal"], bio,
+                                             caption=oge["sablon"], parse_mode="html")
+            else:
+                msg = await client.send_message(oge["kanal"], oge["sablon"],
+                                                parse_mode="html")
+            await event.reply(f"✅ #{kid} onaylandı ve paylaşıldı.", parse_mode="html")
+        except Exception as e:
+            await event.reply(f"⚠️ #{kid} paylaşım hatası: {e}", parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Karar hatası: {e}", parse_mode="html")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v22.10 — Sistem 6: KULLANICI İSTEK İŞLEME (admin olmayan aboneler)
+# ═══════════════════════════════════════════════════════════════════
+
+async def _kullanici_istek_isle(event, kullanici_id: int, metin: str) -> None:
+    """Abonelerin bota gönderdiği istek komutlarını işle.
+    Komutlar: 'ara X', 'isteklerim', 'sil X', 'yardım'."""
+    try:
+        from utils import istek
+        ml = metin.lower().strip()
+
+        if ml in ("yardım", "yardim", "/yardım", "/start", "merhaba", "selam"):
+            await event.reply(
+                "👋 <b>FırsatPulsu İstek Botu</b>\n\n"
+                "Aradığın ürünü söyle, fırsat gelince haber vereyim!\n\n"
+                "📝 <b>ara iphone 15</b> — ürün araması ekle\n"
+                "📋 <b>isteklerim</b> — aktif aramalarını gör\n"
+                "🗑️ <b>sil iphone 15</b> — aramayı kaldır\n\n"
+                "Eşleşen bir fırsat geldiğinde sana bildirim göndereceğim.",
+                parse_mode="html")
+            return
+
+        if ml.startswith("ara "):
+            arama = metin[4:].strip()
+            if istek.istek_ekle(kullanici_id, arama):
+                await event.reply(
+                    f"✅ '<b>{arama}</b>' aramana eklendi!\n"
+                    "Bu ürünle ilgili fırsat gelince haber vereceğim.",
+                    parse_mode="html")
+            else:
+                await event.reply(
+                    "⚠️ Eklenemedi — ya zaten var ya da 10 istek sınırına ulaştın. "
+                    "'<b>isteklerim</b>' ile gör.", parse_mode="html")
+            return
+
+        if ml in ("isteklerim", "/isteklerim"):
+            liste = istek.isteklerim(kullanici_id)
+            if liste:
+                satir = "\n".join(f"  • {a}" for a in liste)
+                await event.reply(f"📋 <b>Aktif aramaların:</b>\n{satir}", parse_mode="html")
+            else:
+                await event.reply("Henüz aramamız yok. '<b>ara iphone</b>' gibi ekleyebilirsin.",
+                                  parse_mode="html")
+            return
+
+        if ml.startswith("sil "):
+            arama = metin[4:].strip()
+            n = istek.istek_sil(kullanici_id, arama)
+            await event.reply(f"🗑️ {n} arama kaldırıldı." if n else "Bu arama bulunamadı.",
+                              parse_mode="html")
+            return
+
+        # Tanınmayan mesaj → yardım yönlendir
+        await event.reply("Anlamadım 🤔 '<b>yardım</b>' yazarak ne yapabileceğimi gör.",
+                          parse_mode="html")
+    except Exception as e:
+        log("UYARI", f"Kullanıcı istek işleme: {e}")
+
+
+async def _istekler_panosu(event) -> None:
+    """Sistem 6: Kullanıcı istek istatistikleri (admin görünümü)."""
+    try:
+        from utils import istek
+        ist = istek.istatistik()
+        await event.reply(
+            f"🔔 <b>KULLANICI İSTEKLERİ</b>\n\n"
+            f"📝 Aktif istek: {ist['aktif_istek']}\n"
+            f"👥 İstek yapan: {ist['istek_yapan']} kullanıcı",
+            parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ İstekler alınamadı: {e}", parse_mode="html")
+
+
+async def _fiyat_takip_panosu(event) -> None:
+    """Sistem 4+5: Fiyat takip istatistikleri."""
+    try:
+        from utils import fiyat_takip
+        ist = fiyat_takip.istatistik()
+        await event.reply(
+            f"💰 <b>FİYAT TAKİP</b>\n\n"
+            f"📦 İzlenen ürün: {ist['izlenen_urun']}\n"
+            f"📊 Fiyat kaydı: {ist['fiyat_kaydi']}",
+            parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Fiyat takip alınamadı: {e}", parse_mode="html")

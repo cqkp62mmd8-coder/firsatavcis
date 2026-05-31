@@ -412,17 +412,24 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 if sonuc:
                     adaylar.append(sonuc)
 
-            # Eğer metin tek blok verdi AMA birden fazla benzersiz ürün linki
-            # varsa, bu muhtemelen çoklu üründür — her ürün linkini ayrı aday yap.
+            # v22.6 — BUG FIX: Tek metin bloğu + birden fazla link, AYNI ürünün
+            # farklı linkleridir (ana link + ilgili/kısa link). Eskiden blok
+            # kopyalanıp 2 "ürün" yapılıyordu → ikisi de AYNI isimle çıkıyordu.
             if len(adaylar) == 1 and len(urun_linkleri) >= 2:
-                temel = adaylar[0]
-                adaylar = []
+                from services.analiz import urun_kimligi
+                kimlikler = {}
                 for ul in urun_linkleri[:5]:
-                    kopya = dict(temel)
-                    kopya["link"] = ul
-                    kopya["magaza"] = magaza_bul(temel["blok"], ul)
-                    adaylar.append(kopya)
-                log("BILGI", f"Tek blok ama {len(urun_linkleri)} ürün linki → {len(adaylar)} ayrı ürün")
+                    k = urun_kimligi(ul)
+                    if k and k not in kimlikler:
+                        kimlikler[k] = ul
+                if len(kimlikler) >= 2:
+                    # Gerçekten farklı ürünler ama tek blok → isim ayrılamaz.
+                    # Güvenli: sadece ilk ürünü paylaş (yanlış isimli 2. üretme).
+                    adaylar[0]["link"] = list(kimlikler.values())[0]
+                    log("BILGI", f"Tek blok + {len(kimlikler)} farklı ürün linki → "
+                                  "isim ayrımı yapılamadığı için sadece ilki paylaşılıyor")
+                else:
+                    adaylar[0]["link"] = urun_linkleri[0]
 
             if not adaylar:
                 return
