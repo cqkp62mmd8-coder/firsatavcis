@@ -25,6 +25,8 @@ ZORUNLU = [
     "utils/ml_kategori.py", "utils/urun_taniyici.py", "utils/reklam.py",
     "utils/segment.py", "utils/urun_hafiza.py", "utils/db.py", "utils/log.py", "utils/cache.py",
     "utils/bakim.py", "utils/duplicate.py", "utils/self_heal.py", "utils/retry.py",
+    "utils/kalite.py", "utils/sozluk.py", "utils/karakutu.py", "utils/ab_test.py",
+    "utils/karantina.py", "utils/fiyat_takip.py", "utils/istek.py",
     "schedulers/gunluk.py", "schedulers/surpriz.py", "schedulers/haftalik.py",
 ]
 
@@ -70,7 +72,7 @@ def klasor_ozeti(kok: str = ".") -> None:
     print("KLASÖR DOSYA SAYILARI (GitHub ile karşılaştırın)")
     print("=" * 55)
     beklenen = {
-        ".": 6, "handlers": 4, "services": 9, "utils": 26, "schedulers": 4,
+        ".": 6, "handlers": 4, "services": 9, "utils": 33, "schedulers": 4,
     }
     for klasor, bekle in beklenen.items():
         yol = kok if klasor == "." else os.path.join(kok, klasor)

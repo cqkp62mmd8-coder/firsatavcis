@@ -388,6 +388,13 @@ async def main() -> None:
                     tg.bot_client = TelegramClient("bot_session", config.API_ID, config.API_HASH)
                     await tg.bot_client.start(bot_token=config.BOT_TOKEN)
                     callback_handler.kaydet(tg.bot_client)
+                    # v22.8 — Proaktif DM'ler (rapor, uyarı) bot client'la gitsin
+                    # (Saved Messages'a düşmesin)
+                    try:
+                        from utils import izleme
+                        izleme.bot_client_ayarla(tg.bot_client)
+                    except Exception:
+                        pass
                     log("OK", "Bot client aktif – inline butonlar çalışıyor")
                 except Exception as e:
                     log("UYARI", f"Bot client başlatılamadı: {e}")

@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v22.5-2026.05.30"   # Kok cozum: cop urun adlari (magaza/kategori/kampanya) reddedilir
+SURUM = "v22.10-2026.05.31"   # Yeni yetenekler: fiyat takip, stok geri-gelme, kullanici istek, akilli rozet
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
@@ -86,6 +86,23 @@ HAFIZA_SAKLAMA_GUN  = _int_env("HAFIZA_SAKLAMA_GUN", 120, min_d=1)    # Ürün h
 # ── Self-healing model izleme (v22) ─────────────────────────────
 MODEL_IZLEME_AKTIF  = _bool_env("MODEL_IZLEME_AKTIF", True)           # Model bozulursa otomatik sıfırla
 MODEL_TEKRAR_ESIK   = _int_env("MODEL_TEKRAR_ESIK", 5, min_d=3)       # Son N paylaşım aynı kategoriyse → bozuk (v22.1: 15→5)
+
+# ── Kategori güven eşiği (v22.7 — Sistem 2: 'emin değilim' modu) ──
+# ML kategoriden bu eşiğin altında eminse YANLIŞ kategori basmak yerine
+# kategorisiz (genel) paylaşır. Yanlış kategori hiç olmasın.
+KATEGORI_GUVEN_ESIK = _int_env("KATEGORI_GUVEN_ESIK", 45, min_d=0, max_d=100)  # yüzde
+
+# ── Kalite puan eşiği (v22.9 — Sistem 2) ────────────────────────
+# Paylaşımın 0-100 kalite puanı bu eşiğin altındaysa paylaşılmaz.
+# 0 = kapalı (varsayılan, güvenli başlangıç). 35-40 önerilir.
+KALITE_PUAN_ESIK = _int_env("KALITE_PUAN_ESIK", 0, min_d=0, max_d=100)
+
+# ── Karantina aralığı (v22.9 — Sistem 3) ────────────────────────
+# Kalite puanı [KARANTINA_ALT, KARANTINA_UST) aralığındaysa → admin onayına.
+# Bu aralığın ÜSTÜ direkt paylaşılır, ALTI direkt elenir.
+# 0,0 = karantina kapalı (varsayılan). Örnek aktif: 30, 50
+KARANTINA_ALT = _int_env("KARANTINA_ALT", 0, min_d=0, max_d=100)
+KARANTINA_UST = _int_env("KARANTINA_UST", 0, min_d=0, max_d=100)
 
 # ── Kara liste ───────────────────────────────────────────────────
 KARA_LISTE = [
