@@ -771,7 +771,6 @@ class TestV22KokCozumAmazonTR:
         from services.sablon import olustur
         cop_mesajlar = [
             "Amazon'da seçili elektronik ürünlerde %30 indirim",
-            "Apple markasında %20 kampanya",
             "Amazon TR\n₺15.950 ₺8.259",
             "Tüm elektronik ürünlerde sepette ek %25",
             "💰 Normal Fiyat: ₺15.950\nİndirimli: ₺8.259",
@@ -794,3 +793,226 @@ class TestV22KokCozumAmazonTR:
         for m in iyi_mesajlar:
             sonuc = olustur(m, 30, ["https://amazon.com.tr/dp/B0X"])
             assert sonuc is not None, f"İyi mesaj reddedildi: {m[:40]}"
+
+
+class TestV226CokluVeMarka:
+    """v22.6 — Çoklu ürün isim bug fix + marka kampanyası."""
+
+    def test_ayni_urun_iki_blok_tek_baslik(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_v226"
+        os.makedirs("/tmp/test_v226", exist_ok=True)
+        from services.sablon import olustur_coklu
+        ayni = "Apple AirPods Pro 2\n4990 TL  7499 TL"
+        sonuc = olustur_coklu(ayni, 33, "https://amazon.com.tr/dp/B0A",
+                              ayni, 33, "https://amazon.com.tr/dp/B0A2")
+        assert sonuc is not None
+        assert sonuc.count("Apple AirPods Pro") == 1
+
+    def test_farkli_urun_iki_baslik(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_v226"
+        os.makedirs("/tmp/test_v226", exist_ok=True)
+        from services.sablon import olustur_coklu
+        f1 = "iPhone 15 Pro Max 256GB\n45000 TL  52000 TL"
+        f2 = "Samsung Galaxy S24 Ultra\n38000 TL  45000 TL"
+        sonuc = olustur_coklu(f1, 13, "https://amazon.com.tr/dp/B0IP",
+                              f2, 15, "https://amazon.com.tr/dp/B0SAM")
+        assert sonuc is not None
+        assert "iPhone 15 Pro Max" in sonuc and "Samsung Galaxy S24" in sonuc
+
+    def test_gercek_marka_kampanyasi_paylasilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_v226"
+        os.makedirs("/tmp/test_v226", exist_ok=True)
+        from services.sablon import olustur
+        for m in ("Nike ürünlerinde %40'a varan indirim",
+                  "LCW markasında %30 indirim"):
+            assert olustur(m, 30, ["https://trendyol.com/x"]) is not None
+
+    def test_magaza_kampanyasi_cop(self):
+        from services.sablon import _marka_kampanya_gecerli
+        assert not _marka_kampanya_gecerli("Amazon'da elektronik ürünlerde %30")
+        assert not _marka_kampanya_gecerli("Tüm elektronik ürünlerde %25")
+        assert _marka_kampanya_gecerli("Nike ürünlerinde %40")
+
+
+class TestV227BuyukGuncelleme:
+    """v22.7 — kalite karne, sözlük, kara kutu, devre kesici, A/B test."""
+
+    def test_kalite_puan_ayrimi(self):
+        from utils import kalite
+        iyi = kalite.puan_hesapla("Apple iPhone 15 Pro Max 256GB", "elektronik",
+                                  0.85, 20, 52000, 45000, True, "https://x.com/y")
+        cop = kalite.puan_hesapla("İndirimli:", "genel", 0.1, 0, 0, 0, False, None)
+        assert iyi["puan"] >= 75
+        assert cop["puan"] < 40
+
+    def test_sozluk_ogrenir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_sozluk"
+        os.makedirs("/tmp/test_sozluk", exist_ok=True)
+        from utils import db; db.init()
+        from utils import sozluk
+        sozluk.ogren("Apple iPhone Pro Max")
+        sozluk.ogren("Apple AirPods")
+        assert sozluk.urun_kelimesi_mi("apple")
+        assert not sozluk.urun_kelimesi_mi("zxcvbn")
+
+    def test_karakutu_kaydeder(self):
+        from utils import karakutu
+        karakutu.kaydet("paylasim", "Test ürün")
+        karakutu.kaydet("hata", "Test hata")
+        ozet = karakutu.ozet()
+        assert ozet["toplam"] >= 2
+        assert "son_hata" in ozet
+
+    def test_devre_kesici(self):
+        from utils import retry
+        for _ in range(5):
+            retry.hata_bildir("test_dk")
+        assert retry.devre_acik_mi("test_dk")
+        retry.basari_bildir("test_dk")
+        assert not retry.devre_acik_mi("test_dk")
+
+    def test_ab_test_ogrenir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_ab"
+        os.makedirs("/tmp/test_ab", exist_ok=True)
+        from utils import db; db.init()
+        from utils import ab_test
+        # B stili kazanan
+        for i in range(100, 110):
+            ab_test.gosterim_kaydet(i, "B"); ab_test.oy_kaydet(i, True)
+        for i in range(110, 113):
+            ab_test.gosterim_kaydet(i, "A"); ab_test.oy_kaydet(i, False)
+        # 30 seçimde B baskın olmalı
+        secim = {}
+        for _ in range(30):
+            kod, _ = ab_test.stil_sec()
+            secim[kod] = secim.get(kod, 0) + 1
+        assert secim.get("B", 0) > secim.get("A", 0)
+
+    def test_kategori_guven_esigi(self):
+        """Sistem 2: belirsiz ürün 'genel' dönmeli."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_guven"
+        os.makedirs("/tmp/test_guven", exist_ok=True)
+        from services.analiz import kategori_bul
+        # Anlamsız metin → genel
+        assert kategori_bul("qwerty asdfgh zxcvbn")[0] == "genel"
+
+    def test_panel_html_uretir(self):
+        """Sistem 11: panel HTML üretilmeli."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_panel"
+        os.makedirs("/tmp/test_panel", exist_ok=True)
+        from utils import db; db.init()
+        from services.health import _panel_html
+        html = _panel_html(3)
+        assert "FırsatPulsu" in html and len(html) > 500
+
+
+class TestV229KaliteCekirdek:
+    """v22.9 — 3-katman ürün adı + kalite kapısı + karantina."""
+
+    def test_3katman_gercek_urun(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_3k"
+        os.makedirs("/tmp/test_3k", exist_ok=True)
+        from services.analiz import urun_adi_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        assert urun_adi_bul("Apple iPhone 15 Pro Max 256GB\n45000 TL")
+        assert urun_adi_bul("Bosch GSR 12V Vidalama\n899 TL")
+
+    def test_3katman_cop_none(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_3k"
+        os.makedirs("/tmp/test_3k", exist_ok=True)
+        from services.analiz import urun_adi_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        assert urun_adi_bul("Amazon TR\n15950 TL") is None
+
+    def test_karantina_yasam_dongusu(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kar"
+        os.makedirs("/tmp/test_kar", exist_ok=True)
+        from utils import karantina
+        kid = karantina.ekle("<b>Test</b>", None, ["http://x"], "Amazon",
+                             "elektronik", "@k", 30, 7.0, 42)
+        assert karantina.al(kid) is not None
+        assert any(b["id"] == kid for b in karantina.bekleyenler())
+        oge = karantina.cikar(kid)
+        assert oge["puan"] == 42
+        assert karantina.al(kid) is None
+
+    def test_kalite_kapisi_config(self):
+        """KALITE_PUAN_ESIK config'i okunabilmeli."""
+        import config
+        assert hasattr(config, "KALITE_PUAN_ESIK")
+        assert hasattr(config, "KARANTINA_ALT")
+        assert hasattr(config, "KARANTINA_UST")
+
+
+class TestV2210YeniYetenekler:
+    """v22.10 — fiyat takip, stok geri-gelme, kullanıcı istek, zenginleştirme."""
+
+    def test_fiyat_en_dusuk_tespit(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_ft2"
+        os.makedirs("/tmp/test_ft2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import fiyat_takip as ft
+        ft.fiyat_kaydet("test_x", 1000)
+        ft.fiyat_kaydet("test_x", 950)
+        a = ft.fiyat_analiz("test_x", 800)
+        assert a["en_dusuk_mu"]
+
+    def test_fiyat_sahte_indirim(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_ft2"
+        os.makedirs("/tmp/test_ft2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import fiyat_takip as ft
+        for _ in range(3):
+            ft.fiyat_kaydet("test_sabit", 500)
+        a = ft.fiyat_analiz("test_sabit", 500)
+        assert a["sahte_indirim_mi"]
+
+    def test_stok_geri_gelme(self):
+        import os, time
+        os.environ["DATA_DIR"] = "/tmp/test_ft2"
+        os.makedirs("/tmp/test_ft2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import fiyat_takip as ft
+        assert ft.stok_kontrol("test_stok") == "yeni"
+        with db.cursor() as c:
+            c.execute("UPDATE stok_durum SET son_gorulme=? WHERE kimlik='test_stok'",
+                      (int(time.time()) - 8 * 86400,))
+        assert ft.stok_kontrol("test_stok") == "yeniden_stokta"
+
+    def test_kullanici_istek(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_istek"
+        os.makedirs("/tmp/test_istek", exist_ok=True)
+        from utils import db; db.init()
+        from utils import istek
+        assert istek.istek_ekle(999, "iphone 15")
+        assert not istek.istek_ekle(999, "iphone 15")  # tekrar
+        eslesme = istek.eslesenleri_bul("Apple iPhone 15 Pro Max")
+        assert any(k == 999 for k, _ in eslesme)
+        # Alakasız eşleşmemeli
+        assert not istek.eslesenleri_bul("Samsung TV")
+
+    def test_istek_spam_korumasi(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_istek2"
+        os.makedirs("/tmp/test_istek2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import istek
+        istek.istek_ekle(888, "macbook")
+        e1 = istek.eslesenleri_bul("Apple MacBook Pro M3")
+        e2 = istek.eslesenleri_bul("Apple MacBook Air M2")  # hemen tekrar
+        assert len(e1) == 1 and len(e2) == 0  # 6 saat spam koruması
