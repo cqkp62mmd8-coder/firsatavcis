@@ -51,9 +51,9 @@ def bakim_yap(zorla: bool = False) -> dict:
     metrik_kesim = simdi - 90 * 86400
     sonuc["metrik"] = _sil("metrik", "olusturma", metrik_kesim)
 
-    # 5. Eski paylaşım kayıtları (duplicate tablosu — DUPLICATE_GUN'ün 2 katı yeter)
+    # 5. Eski duplicate kayıtları (DUPLICATE_GUN'ün 2 katı yeter)
     pay_kesim = simdi - max(config.DUPLICATE_GUN * 2, 7) * 86400
-    sonuc["paylasim"] = _sil("paylasim_kayit", "ts", pay_kesim)
+    sonuc["duplicate"] = _sil("duplicate_kayit", "ts", pay_kesim)
 
     # 6. VACUUM — dosyayı fiziksel küçült (sadece bir şey silindiyse)
     toplam = sum(sonuc.values())
@@ -93,7 +93,7 @@ def db_boyut() -> dict:
         pass
     # Tablo satır sayıları
     for tablo in ("kullanici_tikla", "urun_hafiza", "gorulmus",
-                  "metrik", "paylasim_kayit", "mesaj_meta"):
+                  "metrik", "duplicate_kayit", "paylasim_kayit", "mesaj_meta"):
         try:
             with db.cursor() as c:
                 n = c.execute(f"SELECT COUNT(*) n FROM {tablo}").fetchone()["n"]

@@ -35,7 +35,7 @@ def kaydet(linkler: list[str], urun_adi: Optional[str], kategori: Optional[str],
                     continue
                 # Aynı kimlik tekrarı → güncelle (en son paylaşım zamanı)
                 c.execute(
-                    "INSERT INTO paylasim_kayit (kimlik, urun_adi, kategori, magaza, mesaj_id, ts) "
+                    "INSERT INTO duplicate_kayit (kimlik, urun_adi, kategori, magaza, mesaj_id, ts) "
                     "VALUES (?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(kimlik) DO UPDATE SET ts=excluded.ts, mesaj_id=excluded.mesaj_id",
                     (kimlik, (urun_adi or "")[:200], kategori, magaza, mesaj_id, simdi)
@@ -62,7 +62,7 @@ def daha_once_paylasildi_mi(linkler: list[str]) -> Optional[dict]:
         with db.cursor() as c:
             placeholder = ",".join(["?"] * len(kimlikler))
             satir = c.execute(
-                f"SELECT kimlik, urun_adi, kategori, magaza, ts FROM paylasim_kayit "
+                f"SELECT kimlik, urun_adi, kategori, magaza, ts FROM duplicate_kayit "
                 f"WHERE kimlik IN ({placeholder}) AND ts >= ? "
                 f"ORDER BY ts DESC LIMIT 1",
                 kimlikler + [kesim]
@@ -84,10 +84,10 @@ def istatistik() -> dict:
     """Duplicate istatistikleri."""
     try:
         with db.cursor() as c:
-            toplam = c.execute("SELECT COUNT(*) n FROM paylasim_kayit").fetchone()["n"]
+            toplam = c.execute("SELECT COUNT(*) n FROM duplicate_kayit").fetchone()["n"]
             son_gun = int(time.time()) - 86400
             son24 = c.execute(
-                "SELECT COUNT(*) n FROM paylasim_kayit WHERE ts >= ?", (son_gun,)
+                "SELECT COUNT(*) n FROM duplicate_kayit WHERE ts >= ?", (son_gun,)
             ).fetchone()["n"]
             return {"toplam_kayit": toplam, "son_24_saat": son24,
                     "engelleme_gun": config.DUPLICATE_GUN}

@@ -53,21 +53,40 @@ _son_hata_ts = 0.0              # arka arkaya hata olursa bir süre dinlen
 _hata_say = 0
 _DINLENME = 60                  # saniye — çok hata olursa bu kadar dinlen
 _kota_doldu_ts = 0.0            # 429 alındığı an
-_KOTA_DINLENME = 3600           # kota dolunca 1 saat dinlen (kota saatlik/günlük)
 _istek_say = 0
 _basari_say = 0
 
+# v22.3 — Akıllı kota yönetimi (Free tier: 1000/gün, 15/dakika, UTC sıfırlanır)
+_dakika_istekleri: list = []    # son dakika içindeki istek timestamp'leri
+_DAKIKA_LIMIT = 12              # 15 limit ama 12'de fren (güvenli marj)
+_kota_doldu_gun = ""            # 'YYYY-MM-DD' (UTC) — bu günde dolduysa bir daha deneme
+
+
+def _utc_gun() -> str:
+    """UTC tarihi YYYY-MM-DD — Gemini kotası UTC gece yarısı sıfırlanır."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+
 
 def kullanilabilir() -> bool:
-    """Gemini şu an kullanılabilir mi? (anahtar var + dinlenmede değil)"""
+    """Gemini şu an kullanılabilir mi?
+    v22.3: Günlük kota dolduysa UTC gün dönene kadar BEKLEME (eskiden 1 saat
+    boş yere deniyordu — kota günlüktür, saatlik değil)."""
     if not aktif:
         return False
-    # Kota doldu (429) → uzun süre dinlen, gereksiz istek atma
-    if _kota_doldu_ts and (time.time() - _kota_doldu_ts) < _KOTA_DINLENME:
+    # Günlük kota dolduysa: o günün UTC tarihinde bir daha denemeyiz
+    if _kota_doldu_gun and _kota_doldu_gun == _utc_gun():
         return False
     # Arka arkaya çok hata → kısa dinlen
     if _hata_say >= 5 and (time.time() - _son_hata_ts) < _DINLENME:
         return False
+    # Dakikalık limit kontrolü (önleyici fren)
+    simdi = time.time()
+    # 60 saniyeden eski kayıtları temizle
+    while _dakika_istekleri and _dakika_istekleri[0] < simdi - 60:
+        _dakika_istekleri.pop(0)
+    if len(_dakika_istekleri) >= _DAKIKA_LIMIT:
+        return False   # bu dakika için doldu, biraz bekleyelim
     return True
 
 
@@ -112,6 +131,7 @@ def _prompt(mesaj: str) -> str:
 def _gemini_cagir(mesaj: str) -> Optional[dict]:
     """Gemini API'sine tek istek. Sonuç dict veya None (hata)."""
     global _son_hata_ts, _hata_say, _istek_say, _basari_say, _kota_doldu_ts
+    global _kota_doldu_gun
 
     if not _API_KEY:
         return None
@@ -136,6 +156,7 @@ def _gemini_cagir(mesaj: str) -> Optional[dict]:
 
     try:
         _istek_say += 1
+        _dakika_istekleri.append(time.time())
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
             ham = r.read().decode("utf-8", errors="ignore")
         veri = json.loads(ham)
@@ -161,6 +182,7 @@ def _gemini_cagir(mesaj: str) -> Optional[dict]:
         # Başarı — hata/kota sayaçlarını sıfırla
         _hata_say = 0
         _kota_doldu_ts = 0.0
+        _kota_doldu_gun = ""   # v22.3: gün döndü, kota açıldı
         _basari_say += 1
         try:
             kalite = int(sonuc.get("kalite", 0))
@@ -186,8 +208,12 @@ def _gemini_cagir(mesaj: str) -> Optional[dict]:
         _hata_say += 1
         _son_hata_ts = time.time()
         if e.code == 429:
+            # v22.3: Günlük kota dolduysa o gün için Gemini'yi tamamen kapat.
+            # UTC gece yarısı (TR 03:00) sıfırlanır → ertesi gün otomatik açılır.
+            _kota_doldu_gun = _utc_gun()
             _kota_doldu_ts = time.time()
-            log("UYARI", "Gemini kota doldu (429) — 1 saat yedek sisteme dönülüyor")
+            log("UYARI", f"Gemini günlük kota doldu (429) — UTC {_kota_doldu_gun} "
+                          "günü için Gemini kapatıldı, yarın TR 03:00'te otomatik açılır")
         else:
             log("UYARI", f"Gemini HTTP {e.code} — yedeğe dönülüyor")
         return None
@@ -253,6 +279,7 @@ def kisa_metin(talimat: str, maks_token: int = 80) -> Optional[str]:
     )
     try:
         _istek_say += 1
+        _dakika_istekleri.append(time.time())
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
             ham = r.read().decode("utf-8", errors="ignore")
         veri = json.loads(ham)
@@ -273,14 +300,21 @@ def kisa_metin(talimat: str, maks_token: int = 80) -> Optional[str]:
 
 
 def istatistik() -> dict:
-    kota_aktif = bool(_kota_doldu_ts and (time.time() - _kota_doldu_ts) < _KOTA_DINLENME)
+    # v22.3: günlük kota durumu
+    kota_aktif = bool(_kota_doldu_gun and _kota_doldu_gun == _utc_gun())
+    # Dakika içindeki istek sayısı (canlı izleme)
+    simdi = time.time()
+    while _dakika_istekleri and _dakika_istekleri[0] < simdi - 60:
+        _dakika_istekleri.pop(0)
     return {
-        "aktif":        aktif,
-        "model":        _MODEL if aktif else "(devre dışı — anahtar yok)",
-        "istek":        _istek_say,
-        "basari":       _basari_say,
-        "hata":         _hata_say,
-        "cache_boyut":  len(_cache),
-        "dinlenmede":   not kullanilabilir() and aktif,
-        "kota_doldu":   kota_aktif,
+        "aktif":          aktif,
+        "model":          _MODEL if aktif else "(devre dışı — anahtar yok)",
+        "istek":          _istek_say,
+        "basari":         _basari_say,
+        "hata":           _hata_say,
+        "cache_boyut":    len(_cache),
+        "dinlenmede":     not kullanilabilir() and aktif,
+        "kota_doldu":     kota_aktif,
+        "dakika_istegi":  len(_dakika_istekleri),
+        "dakika_limit":   _DAKIKA_LIMIT,
     }

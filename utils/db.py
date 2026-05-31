@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS backup_meta (
     deger   TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS paylasim_kayit (
+CREATE TABLE IF NOT EXISTS duplicate_kayit (
     kimlik      TEXT PRIMARY KEY,
     urun_adi    TEXT,
     kategori    TEXT,
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS paylasim_kayit (
     mesaj_id    INTEGER,
     ts          INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_paylasim_ts ON paylasim_kayit(ts);
+CREATE INDEX IF NOT EXISTS idx_duplicate_ts ON duplicate_kayit(ts);
 
 CREATE TABLE IF NOT EXISTS urun_hafiza (
     kimlik     TEXT PRIMARY KEY,

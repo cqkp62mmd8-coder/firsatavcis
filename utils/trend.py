@@ -17,6 +17,19 @@ def _tablo_olustur() -> None:
         return
     try:
         with cursor() as c:
+            # v22.4 — Şema doğrulaması: tablo varsa ama yanlış şemadaysa
+            # (örn. duplicate.py'nin eski çatışan şeması), yedekle ve yeniden kur.
+            row = c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='paylasim_kayit'"
+            ).fetchone()
+            if row:
+                # Tablo var — şemasını doğrula
+                kolonlar = {r["name"] for r in c.execute("PRAGMA table_info(paylasim_kayit)").fetchall()}
+                if "ana_kat" not in kolonlar:
+                    # Yanlış şema → eski tabloyu yedekle, yeniden oluştur
+                    c.execute("ALTER TABLE paylasim_kayit RENAME TO paylasim_kayit_bozuk")
+                    log("UYARI", "paylasim_kayit yanlış şemada bulundu — yeniden oluşturuluyor")
+
             c.execute("""
                 CREATE TABLE IF NOT EXISTS paylasim_kayit (
                     id        INTEGER PRIMARY KEY AUTOINCREMENT,
