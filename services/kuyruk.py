@@ -393,6 +393,12 @@ async def worker(
                                     pass
                     except Exception:
                         pass
+                    # v22.11 — Sistem 10: Paylaşım saatini kaydet (zamanlama öğrensin)
+                    try:
+                        from utils import zamanlama
+                        zamanlama.paylasim_kaydet()
+                    except Exception:
+                        pass
                     # v22.10 — Sistem 4+5: Fiyat geçmişi + stok geri-gelme takibi
                     try:
                         from utils import fiyat_takip

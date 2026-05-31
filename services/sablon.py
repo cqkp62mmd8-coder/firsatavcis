@@ -21,7 +21,7 @@ from services.analiz import (
     magaza_bul, urun_adi_bul, fiyat_bul, link_bul,
     stok_kritik_mi, indirim_turu, kategori_bul,
     kupon_bul, min_siparis_bul, sahte_indirim_mi,
-    firsat_skoru,
+    firsat_skoru, _urun_adi_makul,
 )
 from services.zenginlestir import guvenilirlik_etiketi
 from utils.log import simdi_tr
@@ -345,7 +345,12 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     if negatif_mi(metin):
         return None
     # Ürün adı: Gemini varsa onu kullan (boş slogan kontrolü için)
-    _urun = (gemini or {}).get("urun_adi") or urun_adi_bul(metin)
+    # v22.12: Gemini ürün adı da makullük kontrolünden geçmeli (Amazon TR engeli)
+    _g_urun = (gemini or {}).get("urun_adi")
+    if _g_urun and _urun_adi_makul(_g_urun):
+        _urun = _g_urun
+    else:
+        _urun = urun_adi_bul(metin)
     _tur_on = indirim_turu(metin)
     # v22.6 — Marka kampanyası DESTEKLENİYOR (kullanıcı istedi) ama güvenli:
     #   • Ürün adı varsa → normal ürün paylaşımı

@@ -642,6 +642,26 @@ def _urun_adi_makul(ad: str) -> bool:
         cop_oran = sum(1 for k in kelimeler_tl if k in _CÖP_AD) / len(kelimeler_tl)
         if cop_oran >= 0.75:
             return False
+
+    # v22.12 KÖK ÇÖZÜM: Bir mağaza adı geçiyorsa ("amazon", "trendyol" vb) VE
+    # geri kalan kelimeler sadece jenerik/bağlam ise → çöp.
+    # "Amazon TR ürünleri", "Trendyol kampanya" gibi varyasyonları yakalar.
+    _MAGAZA_KOK = {"amazon", "trendyol", "hepsiburada", "n11", "mediamarkt",
+                   "media", "teknosa", "vatan", "gittigidiyor", "morhipo",
+                   "boyner", "carrefoursa", "carrefour", "migros", "a101",
+                   "bim", "şok", "sok", "ikea", "decathlon", "gratis"}
+    _JENERIK_EK = {"tr", "türkiye", "turkiye", "ürünleri", "urunleri", "ürün",
+                   "urun", "ürünler", "urunler", "mağaza", "magaza", "store",
+                   "official", "resmi", "com", "shop"}
+    if kelimeler_tl:
+        magaza_gecti = any(k in _MAGAZA_KOK for k in kelimeler_tl)
+        # Mağaza dışındaki kelimeler tamamen jenerik/çöp/ek mi?
+        kalan = [k for k in kelimeler_tl if k not in _MAGAZA_KOK]
+        kalan_hepsi_jenerik = all(
+            (k in _JENERIK_EK or k in _CÖP_AD) for k in kalan
+        ) if kalan else True
+        if magaza_gecti and kalan_hepsi_jenerik:
+            return False
     # "X markasında" / "X ürünlerinde" → kampanya satırı, ürün değil
     if re.search(r"\b(markasında|ürünlerinde|ürünlerde|kategorisinde|serisinde)\b",
                  ad, re.I):
