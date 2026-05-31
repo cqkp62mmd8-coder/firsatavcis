@@ -328,8 +328,11 @@ def kategori_bul(metin: str) -> tuple[str, str, list[str]]:
         # Hiyerarşik formatı parse et
         ana = tam_kat.split(":", 1)[0]
 
-        # Çok düşük güven → belirsiz kuyruğuna ekle, genel döndür
-        if guven < 0.25:
+        # v22.7 Sistem 2: Güven eşiği config'ten. Düşük güvende YANLIŞ kategori
+        # basmaktansa 'genel' (kategorisiz) paylaş — yanlış kategori hiç olmasın.
+        import config as _cfg
+        _esik = _cfg.KATEGORI_GUVEN_ESIK / 100.0
+        if guven < _esik:
             try:
                 ml_kategori.belirsiz_kaydet(metin, tam_kat, guven)
             except Exception:
@@ -452,26 +455,72 @@ def urun_adi_bul(metin: str) -> str | None:
 
 
 def _urun_adi_bul_hesapla(metin: str) -> str | None:
-    """urun_adi_bul'un asıl gövdesi (cache MISS yolu)."""
+    """urun_adi_bul'un asıl gövdesi (cache MISS yolu).
+
+    v22.9 — Sistem 1: 3-KATMAN OYLAMA.
+    Üç bağımsız yöntem ürün adı çıkarır, sonuçlar karşılaştırılır:
+      1. ML (urun_taniyici) — öğrenen sınıflandırıcı
+      2. Yapısal — regex/konum tabanlı
+      3. Sözlük teyidi — çıkan adın kelimeleri sözlükte ürün kelimesi mi
+    En güvenilir sonuç seçilir. Hiçbiri makul değilse None.
+    """
     if not metin:
         return None
 
-    # ── Ön temizlik: "Google'da Karşılaştır" gibi CTA'ları ve markdown
-    # linklerini ürün adından ayıkla (ama ürün adının kendisini koru) ──
     temiz_metin = _karsilastir_ctasi_temizle(metin)
 
-    # ── Model tabanlı tanıma (öğrenen sınıflandırıcı) ──
+    # Katman 1: ML
+    ml_ad = None
     try:
         from utils import urun_taniyici
-        ad = urun_taniyici.urun_adi_cikar(temiz_metin)
-        if ad and _urun_adi_makul(ad):
-            return _ad_son_temizlik(ad)
+        aday = urun_taniyici.urun_adi_cikar(temiz_metin)
+        if aday and _urun_adi_makul(aday):
+            ml_ad = _ad_son_temizlik(aday)
     except Exception:
-        pass   # model hatası → yapısal yedek
+        pass
 
-    yapisal = _urun_adi_bul_yapisal(temiz_metin)
-    if yapisal and _urun_adi_makul(yapisal):
-        return _ad_son_temizlik(yapisal)
+    # Katman 2: Yapısal
+    yapisal_ad = None
+    aday2 = _urun_adi_bul_yapisal(temiz_metin)
+    if aday2 and _urun_adi_makul(aday2):
+        yapisal_ad = _ad_son_temizlik(aday2)
+
+    # Karar mantığı (oylama):
+    # a) İkisi de aynı/çok benzer → en güvenilir, direkt döndür
+    if ml_ad and yapisal_ad:
+        if ml_ad.lower() == yapisal_ad.lower():
+            return ml_ad
+        # Biri diğerini içeriyorsa, daha uzun olan (daha bilgili) kazanır
+        if ml_ad.lower() in yapisal_ad.lower():
+            return yapisal_ad
+        if yapisal_ad.lower() in ml_ad.lower():
+            return ml_ad
+        # Çelişki → sözlük hakemliği: hangisinin kelimeleri sözlükte daha çok
+        secim = _sozluk_hakem(ml_ad, yapisal_ad)
+        return secim or ml_ad   # hakem kararsızsa ML'e güven
+
+    # b) Sadece biri sonuç verdi
+    if ml_ad:
+        return ml_ad
+    if yapisal_ad:
+        return yapisal_ad
+    return None
+
+
+def _sozluk_hakem(ad1: str, ad2: str) -> str | None:
+    """İki aday ürün adından, kelimeleri sözlükte daha çok 'ürün kelimesi'
+    olarak bilineni seç. Sözlük yoksa/eşitse None."""
+    try:
+        from utils import sozluk
+        def skor(ad: str) -> int:
+            return sum(1 for k in ad.split() if sozluk.urun_kelimesi_mi(k))
+        s1, s2 = skor(ad1), skor(ad2)
+        if s1 > s2:
+            return ad1
+        if s2 > s1:
+            return ad2
+    except Exception:
+        pass
     return None
 
 
@@ -563,6 +612,9 @@ def _urun_adi_makul(ad: str) -> bool:
         "indirimli", "indirim", "kampanya", "fırsat", "markasında",
         "ürünlerinde", "ürünlerde", "kampanyası", "sepette", "amazon'da",
         "trendyol'da", "hepsiburada'da", "amazon da", "trendyol da",
+        # Kampanya niteleyicileri — "Tüm elektronik", "Seçili giyim" gibi
+        "tüm", "tum", "seçili", "secili", "çeşitli", "cesitli", "binlerce",
+        "tüm ürünlerde", "seçili ürünlerde",
     }
     _FIYAT_BAGLAM = {
         "fiyat", "fiyatı", "indirim", "indirimli", "normal", "tl", "₺",

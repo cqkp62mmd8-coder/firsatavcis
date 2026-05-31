@@ -363,6 +363,61 @@ async def worker(
                                           f"{tetik.get('tekrar')} kez tekrar etmişti")
                     except Exception:
                         pass
+                    # v22.7 — Sistem 6: Kaliteli üründen kelime öğren (sözlük büyüsün)
+                    try:
+                        from utils import sozluk
+                        if ad:
+                            sozluk.ogren(ad)
+                    except Exception:
+                        pass
+                    # v22.7 — Sistem 7: Kara kutuya paylaşımı kaydet
+                    try:
+                        from utils import karakutu
+                        karakutu.kaydet("paylasim", f"{ad or '?'} [{kat}] {magaza}")
+                    except Exception:
+                        pass
+                    # v22.10 — Sistem 6: Kullanıcı isteklerini kontrol et, eşleşen
+                    # abonelere bot client ile bildirim gönder
+                    try:
+                        from utils import istek, izleme
+                        if ad and izleme._bot_client_ref is not None:
+                            eslesme = istek.eslesenleri_bul(ad, sablon)
+                            for kullanici_id, arama in eslesme[:20]:
+                                try:
+                                    await izleme._bot_client_ref.send_message(
+                                        kullanici_id,
+                                        f"🔔 Aradığın <b>{arama}</b> için fırsat geldi!\n\n"
+                                        f"📌 {ad}\n👉 @{config.HEDEF_KANAL.lstrip('@')}",
+                                        parse_mode="html")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                    # v22.10 — Sistem 4+5: Fiyat geçmişi + stok geri-gelme takibi
+                    try:
+                        from utils import fiyat_takip
+                        from services.analiz import urun_kimligi
+                        import re as _re_f
+                        ilk_lnk = None
+                        if isinstance(lnk, str):
+                            ilk_lnk = lnk
+                        elif isinstance(linkler, list) and linkler:
+                            ilk_lnk = linkler[0]
+                        if ilk_lnk:
+                            kim = urun_kimligi(ilk_lnk)
+                            if kim:
+                                # Şablondan yeni fiyatı çıkar (💰 <b>X TL</b>)
+                                fm = _re_f.search(r"💰[^<]*<b>([\d.,]+)\s*TL", sablon)
+                                if fm:
+                                    try:
+                                        yf = float(fm.group(1).replace(".", "").replace(",", "."))
+                                        if yf > 0:
+                                            fiyat_takip.fiyat_kaydet(kim, yf)
+                                    except ValueError:
+                                        pass
+                                fiyat_takip.stok_kontrol(kim)
+                    except Exception:
+                        pass
                     # v22: Akıllı özet için mesaj_id'yi günlüğe iliştir
                     try:
                         from schedulers import gunluk as _gun

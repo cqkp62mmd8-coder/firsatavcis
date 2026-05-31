@@ -24,6 +24,75 @@ def son_mesaj_kaydet() -> None:
     _paylasilan_sayisi += 1
 
 
+def _panel_html(kuyruk_size: int = 0) -> str:
+    """v22.7 — Sistem 11: Canlı izleme paneli (telefon tarayıcısı için)."""
+    import config
+    veri = {}
+    try:
+        from utils import duplicate
+        veri["dup"] = duplicate.istatistik()
+    except Exception:
+        veri["dup"] = {}
+    try:
+        from utils import kalite
+        veri["kalite"] = kalite.istatistik()
+    except Exception:
+        veri["kalite"] = {}
+    try:
+        from utils import gemini
+        veri["gemini"] = gemini.istatistik()
+    except Exception:
+        veri["gemini"] = {}
+    try:
+        from utils import self_heal
+        veri["sh"] = self_heal.durum()
+    except Exception:
+        veri["sh"] = {}
+    try:
+        from utils import karakutu
+        veri["kk"] = karakutu.ozet()
+    except Exception:
+        veri["kk"] = {}
+
+    dup = veri.get("dup", {})
+    kal = veri.get("kalite", {})
+    gem = veri.get("gemini", {})
+    sh = veri.get("sh", {})
+    kk = veri.get("kk", {})
+
+    surum = getattr(config, "SURUM", "?")
+    sh_durum = "✅ Normal" if not sh.get("bozuk_mu") else "⚠️ Bozuk"
+    gem_durum = f"{gem.get('basari', 0)}/{gem.get('istek', 0)}" if gem else "—"
+
+    return f"""<!DOCTYPE html>
+<html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>FırsatPulsu Panel</title>
+<style>
+body{{font-family:-apple-system,system-ui,sans-serif;background:#0f1115;color:#e6e6e6;margin:0;padding:16px}}
+h1{{font-size:20px;margin:0 0 4px}}
+.s{{color:#888;font-size:12px;margin-bottom:16px}}
+.g{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+.c{{background:#1a1d24;border-radius:12px;padding:14px}}
+.c .l{{color:#999;font-size:11px;text-transform:uppercase;letter-spacing:.5px}}
+.c .v{{font-size:22px;font-weight:700;margin-top:4px}}
+.full{{grid-column:1/3}}
+.ok{{color:#4ade80}}.warn{{color:#fbbf24}}
+</style></head><body>
+<h1>🤖 FırsatPulsu</h1>
+<div class="s">{surum} · 30sn'de bir yenilenir</div>
+<div class="g">
+<div class="c"><div class="l">Kuyruk</div><div class="v">{kuyruk_size}</div></div>
+<div class="c"><div class="l">Model</div><div class="v">{sh_durum}</div></div>
+<div class="c"><div class="l">Son 24h Paylaşım</div><div class="v">{dup.get('son_24_saat','—')}</div></div>
+<div class="c"><div class="l">Ort. Kalite</div><div class="v">{kal.get('ortalama','—')}</div></div>
+<div class="c"><div class="l">Gemini</div><div class="v">{gem_durum}</div></div>
+<div class="c"><div class="l">Olay (kara kutu)</div><div class="v">{kk.get('toplam','—')}</div></div>
+</div>
+</body></html>"""
+
+
 def _durum_json(kuyruk_size: int = 0) -> bytes:
     simdi_ts = simdi_tr().timestamp()
     uptime = int(simdi_ts - _baslangic_zamani) if _baslangic_zamani else 0
@@ -88,8 +157,17 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ku
                 f"Content-Length: {len(body)}\r\n"
                 f"Connection: close\r\n\r\n"
             ).encode("utf-8") + body
+        elif yol.startswith("/panel"):
+            # v22.7 — Sistem 11: Canlı izleme paneli (telefondan tarayıcıyla)
+            html = _panel_html(kuyruk_size).encode("utf-8")
+            cevap = (
+                f"HTTP/1.1 200 OK\r\n"
+                f"Content-Type: text/html; charset=utf-8\r\n"
+                f"Content-Length: {len(html)}\r\n"
+                f"Connection: close\r\n\r\n"
+            ).encode("utf-8") + html
         else:
-            html = b"<h1>FirsatPulsu Bot</h1><p>Calisiyor. <a href='/health'>Health check</a></p>"
+            html = b"<h1>FirsatPulsu Bot</h1><p>Calisiyor. <a href='/health'>Health</a> | <a href='/panel'>Panel</a></p>"
             cevap = (
                 f"HTTP/1.1 200 OK\r\n"
                 f"Content-Type: text/html; charset=utf-8\r\n"

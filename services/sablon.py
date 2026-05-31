@@ -274,6 +274,25 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     if guven:
         s.append(guven)
 
+    # v22.10 — Sistem 4+5+7: Fiyat geçmişi & stok rozetleri
+    try:
+        if lnk:
+            from utils import fiyat_takip
+            from services.analiz import urun_kimligi
+            kim = urun_kimligi(lnk)
+            if kim and yeni_v:
+                analiz = fiyat_takip.fiyat_analiz(kim, yeni_v)
+                if analiz["en_dusuk_mu"] and analiz["kayit_sayisi"] >= 2:
+                    s.append("💎 <b>Son 30 günün en düşük fiyatı!</b>")
+                elif analiz["sahte_indirim_mi"]:
+                    s.append("⚠️ <i>Fiyat geçmişi sabit — indirim oranını araştır</i>")
+                # Stok geri-gelme
+                durum = fiyat_takip.stok_kontrol(kim)
+                if durum == "yeniden_stokta":
+                    s.append("🔄 <i>Yeniden stokta!</i>")
+    except Exception:
+        pass
+
     # Stok / uyarılar
     if stok_kritik_mi(metin):
         s.append("🚨 <b>Son stoklar</b>")
@@ -295,6 +314,30 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
 
 # ── Tek ürün şablonu ────────────────────────────────────────────
 
+def _marka_kampanya_gecerli(metin: str) -> bool:
+    """v22.6 — Gerçek marka kampanyası mı, yoksa çöp mü?
+    Geçerli: 'Nike ürünlerinde %40', 'LCW markasında %30 indirim'
+    Çöp:     'Amazon TR', 'elektronik ürünlerde' (mağaza/jenerik kategori)
+    """
+    if not metin:
+        return False
+    import re as _re
+    ml = metin.replace("İ", "i").replace("I", "ı").lower()
+    _MAGAZALAR = ("amazon", "trendyol", "hepsiburada", "n11", "mediamarkt",
+                  "teknosa", "vatan", "gittigidiyor", "morhipo", "boyner",
+                  "carrefour", "migros", "a101", "bim", "şok")
+    _JENERIK = ("elektronik", "giyim", "kozmetik", "mobilya", "spor",
+                "kitap", "oyuncak", "beyaz eşya", "ev ürünleri")
+    m = _re.search(r"(\w+)\s*(?:markasında|markasinda|ürünlerinde|urunlerinde|serisinde)", ml)
+    if m:
+        marka = m.group(1).strip()
+        if marka in _MAGAZALAR or marka in _JENERIK:
+            return False
+        if len(marka) >= 2 and _re.search(r"[a-zçğıöşü]", marka):
+            return True
+    return False
+
+
 def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
             gemini: dict | None = None) -> str | None:
     # NOT: indirim <= 0 olan ürünleri de paylaşıyoruz (fiyat odaklı başlık).
@@ -303,11 +346,16 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
         return None
     # Ürün adı: Gemini varsa onu kullan (boş slogan kontrolü için)
     _urun = (gemini or {}).get("urun_adi") or urun_adi_bul(metin)
-    # v22.5 KÖKTEN ÇÖZÜM: Ürün adı yoksa HİÇ paylaşma — marka kampanyası dahil.
-    # Eskiden marka türünde ürün adı yoksa "Amazon TR + Mutfak ürünleri" gibi
-    # çöp başlıklarla paylaşılıyordu. Artık ürün adı zorunlu.
-    if not _urun:
+    _tur_on = indirim_turu(metin)
+    # v22.6 — Marka kampanyası DESTEKLENİYOR (kullanıcı istedi) ama güvenli:
+    #   • Ürün adı varsa → normal ürün paylaşımı
+    #   • Ürün adı yok AMA gerçek marka kampanyası ise → marka şablonu
+    #   • Ürün adı yok VE marka kampanyası da değilse → çöp, paylaşma
+    if not _urun and _tur_on != "marka":
         return None
+    if not _urun and _tur_on == "marka":
+        if not _marka_kampanya_gecerli(metin):
+            return None
     bl  = buton_linkleri or []
     lnk = link_bul(metin, bl)
     mag = magaza_bul(metin, lnk)
@@ -348,6 +396,25 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     # ── KALİTE KAPISI: bozuk/eksik şablonu paylaşma (merkezi savunma) ──
     if not _sablon_kalite_gecer(cikti, _urun, lnk, indirim_turu(metin)):
         return None
+
+    # v22.9 — Sistem 2: Kalite puanı kapısı. Düşük puanlı paylaşımları ele.
+    try:
+        import config as _cfg
+        if getattr(_cfg, "KALITE_PUAN_ESIK", 0) > 0:
+            from utils import kalite
+            from services.analiz import kategori_bul_tam, fiyat_bul
+            ana_k, _, guven = kategori_bul_tam(_urun or metin)
+            eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
+            gecer = kalite.degerlendir(
+                _urun, ana_k, guven, indirim, eski_v, yeni_v,
+                gorsel_var=True,   # şablon aşamasında varsayılan
+                link=lnk, esik=_cfg.KALITE_PUAN_ESIK,
+            )
+            if not gecer:
+                return None
+    except Exception:
+        pass   # kalite modülü hatası paylaşımı engellememellİ
+
     return cikti
 
 
@@ -405,6 +472,15 @@ def olustur_coklu(
 ) -> str | None:
     if (indirim1 <= 0 and indirim2 <= 0) or negatif_mi(blok1) or negatif_mi(blok2):
         return None
+
+    # v22.6 — Güvenlik: İki bloğun ürün adı AYNI ise, bunlar aslında tek üründür
+    # (yanlışlıkla 2 kopya). Tek ürün şablonuyla paylaş — "aynı isim 2 kez" olmasın.
+    _ad1 = urun_adi_bul(blok1)
+    _ad2 = urun_adi_bul(blok2)
+    if _ad1 and _ad2 and _ad1.strip().lower() == _ad2.strip().lower():
+        if indirim1 >= indirim2:
+            return olustur(blok1, indirim1, [lnk1] if lnk1 else btn_links)
+        return olustur(blok2, indirim2, [lnk2] if lnk2 else btn_links)
 
     bl    = btn_links or []
     # Mağaza tespitinde link öncelikli — bu fix #5
