@@ -48,6 +48,13 @@ def kaydet(bot_client: TelegramClient) -> None:
                     karakutu.kaydet("mesaj", f"Oy: {oy_turu} (msg {mesaj_id})")
                 except Exception:
                     pass
+                # v22.11 — Sistem 10: Bu saatte oy alındı (zamanlama öğrensin)
+                if oy_turu == "good":
+                    try:
+                        from utils import zamanlama
+                        zamanlama.oy_kaydet()
+                    except Exception:
+                        pass
 
             # Kullanıcıya geri bildirim
             if not yeni_oy:

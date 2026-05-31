@@ -65,6 +65,7 @@ _YARDIM = (
     "/reddet &lt;id&gt; — Karantinadakini ele\n"
     "/istekler — Kullanıcı istekleri (Sistem 6)\n"
     "/fiyat_takip — Fiyat izleme durumu\n"
+    "/zamanlama — En iyi paylaşım saatleri\n"
     "/rapor_kart — Günlük performans kartı\n"
     "/scrape &lt;url&gt; — Ürün sayfası bilgi çıkar\n"
     "/yardim — Bu listeyi göster"
@@ -270,6 +271,9 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/fiyat_takip":
             await _fiyat_takip_panosu(event)
+
+        elif komut == "/zamanlama":
+            await _zamanlama_panosu(event)
 
         elif komut.startswith("/onayla"):
             await _karantina_karar(event, komut, onayla=True)
@@ -1643,3 +1647,25 @@ async def _fiyat_takip_panosu(event) -> None:
             parse_mode="html")
     except Exception as e:
         await event.reply(f"⚠️ Fiyat takip alınamadı: {e}", parse_mode="html")
+
+
+async def _zamanlama_panosu(event) -> None:
+    """Sistem 10: Akıllı zamanlama — en iyi etkileşim saatleri."""
+    try:
+        from utils import zamanlama
+        ist = zamanlama.istatistik()
+        en_iyi = ist.get("en_iyi", [])
+        if not en_iyi:
+            await event.reply("⏰ Zamanlama henüz veri toplamadı (paylaşım+oy bekleniyor).",
+                              parse_mode="html")
+            return
+        satir = "\n".join(f"  • {s:02d}:00 → {o} oy/paylaşım ({p} paylaşım)"
+                          for s, o, p in en_iyi)
+        await event.reply(
+            f"⏰ <b>AKILLI ZAMANLAMA</b>\n\n"
+            f"📤 Toplam paylaşım: {ist['toplam_paylasim']}\n"
+            f"🔥 Toplam oy: {ist['toplam_oy']}\n\n"
+            f"<b>En iyi saatler:</b>\n{satir}",
+            parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Zamanlama alınamadı: {e}", parse_mode="html")

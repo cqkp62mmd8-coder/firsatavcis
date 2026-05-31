@@ -89,12 +89,15 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
             log("FILTRE", f"  Mevcut buton linkleri ({len(btn_links)}): {btn_links}")
         return None
 
-    from services.analiz import fiyat_bul, urun_adi_bul
+    from services.analiz import fiyat_bul, urun_adi_bul, _urun_adi_makul
     _eski_fiyat, _yeni_fiyat, _, _ = fiyat_bul(blok)
 
     # ── ÜRÜN ADI: Gemini varsa onun anlayışı, yoksa saf-Python ──
+    # v22.12 KÖK ÇÖZÜM: Gemini'nin döndürdüğü ad da makullük kontrolünden
+    # GEÇMELİ. Eskiden Gemini "Amazon TR" derse direkt kabul ediliyordu.
     if gemini_sonuc and gemini_sonuc.get("urun_adi"):
-        urun = gemini_sonuc["urun_adi"]
+        g_ad = gemini_sonuc["urun_adi"]
+        urun = g_ad if _urun_adi_makul(g_ad) else urun_adi_bul(blok)
     else:
         urun = urun_adi_bul(blok)
 
