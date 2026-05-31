@@ -704,3 +704,93 @@ class TestV22Performans:
         assert ml_kategori._model_nesli > eski_nesil
         # Cache temiz olmalı
         assert len(ml_kategori._tahmin_cache) == 0
+
+
+class TestV22GeminiKota:
+    """v22.3 — Gemini akıllı kota yönetimi (Free tier günlük 1000)."""
+
+    def test_gunluk_kota_gun_donene_kadar_kapali(self):
+        """429 alınca gün dönene kadar Gemini kapalı kalmalı."""
+        import os, importlib
+        os.environ["GEMINI_API_KEY"] = "fake-key-test"
+        from utils import gemini
+        importlib.reload(gemini)
+        # Bugün kotayı doldur
+        gemini._kota_doldu_gun = gemini._utc_gun()
+        assert gemini.kullanilabilir() is False
+
+    def test_gun_donunce_otomatik_acilir(self):
+        """Önceki günün kota damgası bugünü etkilememeli."""
+        import os, datetime, importlib
+        os.environ["GEMINI_API_KEY"] = "fake-key-test"
+        from utils import gemini
+        importlib.reload(gemini)
+        dun = (datetime.datetime.now(datetime.timezone.utc)
+               - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        gemini._kota_doldu_gun = dun
+        assert gemini.kullanilabilir() is True
+
+    def test_dakikalik_limit_freni(self):
+        """Dakika içinde DAKIKA_LIMIT'e ulaşılırsa fren devreye girer."""
+        import os, time, importlib
+        os.environ["GEMINI_API_KEY"] = "fake-key-test"
+        from utils import gemini
+        importlib.reload(gemini)
+        gemini._kota_doldu_gun = ""
+        # Limit kadar istek simüle et
+        gemini._dakika_istekleri = [time.time()] * gemini._DAKIKA_LIMIT
+        assert gemini.kullanilabilir() is False
+        # Eski istekleri at (60s+ önce)
+        gemini._dakika_istekleri = [time.time() - 70] * gemini._DAKIKA_LIMIT
+        assert gemini.kullanilabilir() is True
+
+
+class TestV22KokCozumAmazonTR:
+    """v22.5 — 'Amazon TR' çöp paylaşımı kalıcı kök çözüm testleri."""
+
+    def test_magaza_adi_urun_olamaz(self):
+        from services.analiz import _urun_adi_makul
+        # Mağaza adları tek başına ürün adı olamaz
+        for kelime in ("Amazon TR", "Amazon", "Trendyol", "Hepsiburada",
+                       "Defacto", "elektronik", "İndirimli:"):
+            assert not _urun_adi_makul(kelime), f"'{kelime}' makul SANILDI"
+
+    def test_gercek_urun_makul(self):
+        from services.analiz import _urun_adi_makul
+        for kelime in ("Razer Goliathus Mobile Fare Altlığı",
+                       "Apple AirPods Pro 2. Nesil",
+                       "Isana Argan Yağı Vücut Bakım",
+                       "Bosch GSR 12V Akülü Vidalama"):
+            assert _urun_adi_makul(kelime), f"'{kelime}' reddedildi"
+
+    def test_cop_mesaj_paylasilmaz(self):
+        """Şablon: gerçek ürün adı olmayan mesaj asla paylaşılmaz."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_v225"
+        os.makedirs("/tmp/test_v225", exist_ok=True)
+        from services.sablon import olustur
+        cop_mesajlar = [
+            "Amazon'da seçili elektronik ürünlerde %30 indirim",
+            "Apple markasında %20 kampanya",
+            "Amazon TR\n₺15.950 ₺8.259",
+            "Tüm elektronik ürünlerde sepette ek %25",
+            "💰 Normal Fiyat: ₺15.950\nİndirimli: ₺8.259",
+        ]
+        for m in cop_mesajlar:
+            assert olustur(m, 30, ["https://amazon.com.tr/dp/B0X"]) is None, \
+                   f"Çöp paylaşıldı: {m[:40]}"
+
+    def test_gercek_urun_hala_paylasilir(self):
+        """Gerçek ürünler yanlışlıkla reddedilmemeli."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_v225"
+        os.makedirs("/tmp/test_v225", exist_ok=True)
+        from services.sablon import olustur
+        iyi_mesajlar = [
+            "📦 Razer Fare Altlığı Mavi\n⚡️ ₺61\n💰 ₺890",
+            "Apple AirPods Pro 2\n4990 TL  7499 TL",
+            "Bosch GSR 12V Vidalama\n899 TL  1490 TL",
+        ]
+        for m in iyi_mesajlar:
+            sonuc = olustur(m, 30, ["https://amazon.com.tr/dp/B0X"])
+            assert sonuc is not None, f"İyi mesaj reddedildi: {m[:40]}"
