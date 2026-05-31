@@ -303,7 +303,10 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
         return None
     # Ürün adı: Gemini varsa onu kullan (boş slogan kontrolü için)
     _urun = (gemini or {}).get("urun_adi") or urun_adi_bul(metin)
-    if not _urun and indirim_turu(metin) != "marka":
+    # v22.5 KÖKTEN ÇÖZÜM: Ürün adı yoksa HİÇ paylaşma — marka kampanyası dahil.
+    # Eskiden marka türünde ürün adı yoksa "Amazon TR + Mutfak ürünleri" gibi
+    # çöp başlıklarla paylaşılıyordu. Artık ürün adı zorunlu.
+    if not _urun:
         return None
     bl  = buton_linkleri or []
     lnk = link_bul(metin, bl)
@@ -363,6 +366,20 @@ def _sablon_kalite_gecer(cikti: str, urun: str | None, link: str | None,
         # Bu jenerik adlar sadece marka kampanyasında kabul (gerçek ürün değil)
         if tur != "marka":
             return False
+    # v22.5 — KÖKTEN ÇÖZÜM: Ürün adı bir mağaza adı / jenerik kategori ise
+    # ASLA paylaşılmamalı (marka türünde bile değil — bunlar çöp).
+    # Bot "Amazon TR" / "elektronik" gibi adları başlık yapıyordu.
+    _COP_BASLIK = {
+        "amazon", "amazon tr", "trendyol", "hepsiburada", "n11",
+        "mediamarkt", "media markt", "teknosa", "vatan", "vatan bilgisayar",
+        "elektronik", "giyim", "ev", "kozmetik", "spor", "kitap",
+        "oyuncak", "mobilya", "bahçe", "otomotiv", "indirimli",
+    }
+    if urun:
+        ad_lower = urun.strip().replace("İ", "i").replace("I", "ı").lower()
+        if ad_lower in _COP_BASLIK:
+            return False
+
     # Fiyat satırı varsa ama "0 TL" / boş fiyat → bozuk
     if "🟢 <b> TL" in cikti or "🟢 <b>0 TL" in cikti:
         return False
@@ -373,7 +390,8 @@ def _sablon_kalite_gecer(cikti: str, urun: str | None, link: str | None,
         for magaza in config.MAGAZA_EMOJI.keys():
             if (f"<b>{magaza} ürünleri</b>" in cikti
                     or f"<b>{magaza} kampanyası</b>" in cikti
-                    or f"<b>{magaza} • " in cikti):
+                    or f"<b>{magaza} • " in cikti
+                    or f"<b>{magaza}</b>" in cikti):   # v22.5: sade mağaza adı da çöp
                 return False
     return True
 

@@ -540,24 +540,66 @@ def _karsilastir_ctasi_temizle(metin: str) -> str:
 
 
 def _urun_adi_makul(ad: str) -> bool:
-    """Çıkarılan ürün adı makul mü? Fiyat/rakam çöpünü reddet.
-    ('490 04 İndirim İndirimli', 'Normal Fiyat İndirimli' gibi)."""
+    """Çıkarılan ürün adı makul mü? Fiyat/rakam/mağaza/kampanya çöpünü reddet.
+    ('490 04 İndirim İndirimli', 'Normal Fiyat İndirimli', 'Amazon TR',
+    'elektronik', 'Apple markasında' gibi)."""
     if not ad or len(ad) < 4:
         return False
+
+    # v22.5 — KÖKTEN ÇÖZÜM: Mağaza adı / jenerik kategori / kampanya kelimesi
+    # ürün adı olarak DAHA EN BAŞTA reddedilir. Aksi halde bot "Amazon TR" gibi
+    # mağaza adlarını ya da "elektronik" gibi kategori adlarını ürün sanıyor.
+    _CÖP_AD = {
+        # Mağaza adları — asla tek başına ürün adı olamaz
+        "amazon", "amazon tr", "trendyol", "hepsiburada", "n11", "mediamarkt",
+        "media markt", "teknosa", "vatan", "vatan bilgisayar", "gittigidiyor",
+        "morhipo", "boyner", "lcwaikiki", "lcw", "defacto", "carrefoursa",
+        "a101", "bim", "migros", "şok", "sok", "ikea", "decathlon",
+        # Jenerik kategori adları — ürün değil kategori
+        "elektronik", "giyim", "ev", "kozmetik", "spor", "kitap", "oyuncak",
+        "mobilya", "beyaz eşya", "küçük ev aletleri", "bahçe", "otomotiv",
+        "anne bebek", "yapı market", "yapı", "bilgisayar",
+        # Kampanya / bağlam kelimeleri (tek başına)
+        "indirimli", "indirim", "kampanya", "fırsat", "markasında",
+        "ürünlerinde", "ürünlerde", "kampanyası", "sepette", "amazon'da",
+        "trendyol'da", "hepsiburada'da", "amazon da", "trendyol da",
+    }
     _FIYAT_BAGLAM = {
         "fiyat", "fiyatı", "indirim", "indirimli", "normal", "tl", "₺",
         "lira", "ucuz", "kampanya", "fırsat", "fırsatı", "tasarruf", "adet",
-        # Fiyat-aksiyon kelimeleri (salt açıklama satırları — ürün değil)
         "düşüyor", "düştü", "sepette", "sepete", "özel", "plus", "pass",
         "kupon", "kargo", "ücretsiz", "varan", "varana", "kadar", "ile",
         "altındaki", "ürünün", "özel'e", "sadece", "şimdi", "hemen",
     }
     def _tr_lower(s: str) -> str:
         return s.replace("İ", "i").replace("I", "ı").lower()
+
+    # KARA LİSTE KONTROL — tek başına bir mağaza/kategori/kampanya adı mı?
+    # Noktalama (':', '.', ',', '!') temizlenmiş halini de kontrol et
+    tl_ad = _tr_lower(ad.strip())
+    tl_ad_temiz = re.sub(r"[^\wçğıöşü ]+", "", tl_ad, flags=re.UNICODE).strip()
+    if tl_ad in _CÖP_AD or tl_ad_temiz in _CÖP_AD:
+        return False
+    # Kelimelerin %75'inden fazlası kara listedeyse → çöp
+    kelimeler_tl = [
+        re.sub(r"[^\wçğıöşü]+", "", _tr_lower(k), flags=re.UNICODE)
+        for k in ad.split()
+    ]
+    kelimeler_tl = [k for k in kelimeler_tl if k]
+    if kelimeler_tl:
+        cop_oran = sum(1 for k in kelimeler_tl if k in _CÖP_AD) / len(kelimeler_tl)
+        if cop_oran >= 0.75:
+            return False
+    # "X markasında" / "X ürünlerinde" → kampanya satırı, ürün değil
+    if re.search(r"\b(markasında|ürünlerinde|ürünlerde|kategorisinde|serisinde)\b",
+                 ad, re.I):
+        return False
+
     kelimeler = ad.split()
     anlamli = [
         k for k in kelimeler
         if _tr_lower(k) not in _FIYAT_BAGLAM
+        and _tr_lower(k) not in _CÖP_AD
         and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", k)
     ]
     if not anlamli:
@@ -566,15 +608,12 @@ def _urun_adi_makul(ad: str) -> bool:
     rakam = sum(1 for c in ad if c.isdigit())
     if rakam > len(ad.replace(" ", "")) * 0.4:
         return False
-    # "Kupon: XXX" / "Kod: XXX" ile başlıyorsa → kupon satırı, ürün değil
     if re.match(r"^\s*(kupon|kod|indirim\s*kodu)\s*[:=]", ad, re.I):
         return False
-    # Tek kelime + tamamı büyük harf + ünlü yoksa → kupon kodu (FIRSAT50, AAAAAAAA)
     if len(kelimeler) == 1:
         tek = kelimeler[0]
         if tek.isupper() and len(tek) >= 4:
             return False
-        # Aynı harfin tekrarı (AAAA, XXXX) → anlamsız
         harfler = [c for c in tek if c.isalpha()]
         if harfler and len(set(harfler)) == 1:
             return False
