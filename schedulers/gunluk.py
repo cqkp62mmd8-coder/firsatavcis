@@ -175,6 +175,67 @@ async def gonder(client: TelegramClient) -> None:
     _urunler.clear()
     log("BILGI", "21:00 – tamamlandı")
 
+    # v22.7 — Sistem 12: Günlük performans rapor kartını admin'e gönder
+    try:
+        await _rapor_karti_gonder(client)
+    except Exception as e:
+        log("UYARI", f"Günlük rapor kartı: {e}")
+
+
+async def _rapor_karti_gonder(client) -> None:
+    """Gecelik performans özetini admin'e DM olarak gönder (Sistem 12)."""
+    if not config.ADMIN_ID:
+        return
+    satirlar = ["📊 <b>GÜNLÜK PERFORMANS KARTI</b>", ""]
+    try:
+        from utils import duplicate
+        d = duplicate.istatistik()
+        satirlar.append(f"📤 Son 24h paylaşım: {d['son_24_saat']}")
+    except Exception:
+        pass
+    try:
+        from utils import kalite
+        k = kalite.istatistik()
+        if k["toplam"]:
+            satirlar.append(f"⭐ Ortalama kalite: {k['ortalama']}/100 "
+                          f"(🟢{k['yuksek']} 🔴{k['dusuk']})")
+    except Exception:
+        pass
+    try:
+        from utils import segment
+        o = segment.oy_ozeti(gun=1)
+        if o and o.get("toplam", 0) > 0:
+            satirlar.append(f"👍 Oylar: 🔥{o['iyi']} ❌{o['sahte']}")
+    except Exception:
+        pass
+    try:
+        from utils import urun_hafiza, sozluk
+        h = urun_hafiza.istatistik()
+        s = sozluk.istatistik()
+        satirlar.append(f"🧠 Öğrenme: {h['ogrenilen_marka']} marka, "
+                      f"{s['toplam_kelime']} kelime")
+    except Exception:
+        pass
+    try:
+        from utils import gemini
+        g = gemini.istatistik()
+        satirlar.append(f"🤖 Gemini: {g['basari']}/{g['istek']}")
+    except Exception:
+        pass
+    try:
+        from utils import self_heal
+        sh = self_heal.durum()
+        satirlar.append(f"🔧 Model: {'✅' if not sh['bozuk_mu'] else '⚠️ bozuk'}")
+    except Exception:
+        pass
+    try:
+        from utils import izleme
+        gonderildi = await izleme.admin_dm("\n".join(satirlar), yedek_client=client)
+        if gonderildi:
+            log("BILGI", "Günlük rapor kartı admin'e gönderildi")
+    except Exception as e:
+        log("UYARI", f"Rapor kartı gönderim: {e}")
+
 
 async def zamanlayici(client: TelegramClient) -> None:
     while True:
