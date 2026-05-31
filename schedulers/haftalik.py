@@ -52,6 +52,15 @@ async def gonder(client: TelegramClient) -> None:
     except Exception:
         pass
 
+    # v22.11 — Sistem 9: Haftanın favorisi + kategori ilgi vitrini
+    try:
+        from utils import etkilesim
+        vitrin = etkilesim.haftalik_vitrin_metni(7)
+        if vitrin:
+            satirlar += ["", vitrin]
+    except Exception:
+        pass
+
     satirlar += [
         "",
         "Bildirimleri açık tutun! 🔔", "",
