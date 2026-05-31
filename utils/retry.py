@@ -96,3 +96,53 @@ def deneyerek_sync(
                 raise
             time.sleep(bekleme)
             bekleme = min(bekleme * 2, max_bekleme)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v22.7 — Sistem 9: DEVRE KESİCİ (Circuit Breaker)
+# Bir kaynak/servis sürekli hata veriyorsa otomatik devre kes, bir süre
+# dinlendir, sonra tekrar dene. Bozuk parça tüm botu yavaşlatmasın.
+# ═══════════════════════════════════════════════════════════════════
+import time as _time
+
+# servis adı → {hata_sayisi, son_hata_ts, durum, acilma_ts}
+_devreler: dict = {}
+_ESIK = 5          # arka arkaya bu kadar hata → devre aç (kes)
+_DINLENME = 300    # devre açıkken bu kadar saniye dinlen (5 dk)
+
+
+def devre_acik_mi(servis: str) -> bool:
+    """Bu servisin devresi kesik mi? Kesikse çağrı yapma."""
+    d = _devreler.get(servis)
+    if not d or d["durum"] != "acik":
+        return False
+    # Dinlenme süresi doldu mu? → yarı-açık (bir deneme hakkı)
+    if _time.time() - d["acilma_ts"] >= _DINLENME:
+        d["durum"] = "yari"
+        return False
+    return True
+
+
+def basari_bildir(servis: str) -> None:
+    """Servis başarılı çalıştı → devreyi sıfırla."""
+    if servis in _devreler:
+        _devreler[servis] = {"hata_sayisi": 0, "son_hata_ts": 0,
+                             "durum": "kapali", "acilma_ts": 0}
+
+
+def hata_bildir(servis: str) -> None:
+    """Servis hata verdi → sayacı artır, eşik aşılırsa devreyi aç."""
+    d = _devreler.setdefault(servis, {"hata_sayisi": 0, "son_hata_ts": 0,
+                                       "durum": "kapali", "acilma_ts": 0})
+    d["hata_sayisi"] += 1
+    d["son_hata_ts"] = _time.time()
+    if d["hata_sayisi"] >= _ESIK and d["durum"] != "acik":
+        d["durum"] = "acik"
+        d["acilma_ts"] = _time.time()
+        log("UYARI", f"Devre kesici AÇILDI: '{servis}' "
+                     f"{_ESIK} hata üst üste — {_DINLENME//60}dk dinlenecek")
+
+
+def devre_durumu() -> dict:
+    """Tüm devrelerin durumu (/saglik için)."""
+    return {s: d["durum"] for s, d in _devreler.items() if d["durum"] != "kapali"}
