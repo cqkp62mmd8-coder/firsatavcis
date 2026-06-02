@@ -86,6 +86,13 @@ def kaydet(urun_adi: str, link: Optional[str], kategori: Optional[str]) -> None:
     kategori None ise sadece görülme kaydedilir (kategori öğrenilmez)."""
     if not urun_adi or len(urun_adi) < 3:
         return
+    # v22.14: Çöp ürün adı (Amazon TR, - İndirimli vb) hafızaya YAZILMAZ
+    try:
+        from services.analiz import _urun_adi_makul
+        if not _urun_adi_makul(urun_adi):
+            return
+    except Exception:
+        pass
     _ilk_kurulum()
     try:
         kimlik = _link_kimligi(link) or urun_adi.strip().lower()[:80]
@@ -224,3 +231,24 @@ def istatistik() -> dict:
             }
     except Exception:
         return {"toplam_urun": 0, "kategorili": 0, "ogrenilen_marka": 0, "tekrar_eden": 0}
+
+
+def zehir_temizle() -> dict:
+    """v22.14 — Hafızadaki çöp ürün kayıtlarını sil (Amazon TR, - İndirimli vb).
+    Döner: {silinen}."""
+    _ilk_kurulum()
+    silinen = 0
+    try:
+        from services.analiz import _urun_adi_makul
+        with db.cursor() as c:
+            satirlar = c.execute("SELECT kimlik, urun_adi FROM urun_hafiza").fetchall()
+            for s in satirlar:
+                ad = s["urun_adi"] if "urun_adi" in s.keys() else ""
+                # urun_adi yoksa kimlikten kontrol
+                kontrol = ad or s["kimlik"]
+                if kontrol and not _urun_adi_makul(kontrol):
+                    c.execute("DELETE FROM urun_hafiza WHERE kimlik=?", (s["kimlik"],))
+                    silinen += 1
+    except Exception as e:
+        log("UYARI", f"Hafıza zehir temizle: {e}")
+    return {"silinen": silinen}

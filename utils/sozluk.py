@@ -36,13 +36,36 @@ def _ilk_kurulum() -> None:
 _DURDUR = {
     "ve", "ile", "için", "the", "bir", "tüm", "yeni", "adet", "set",
     "tl", "indirim", "indirimli", "fiyat", "kampanya", "fırsat",
+    # v22.14 — Çöp/bağlam kelimeleri (model zehirlenmesini önle)
+    "var", "yok", "stokta", "normal", "ucuz", "ücretsiz", "kargo",
+    "sepette", "sepet", "kupon", "kod", "şimdi", "hemen", "son",
+    "amazon", "trendyol", "hepsiburada", "n11", "mediamarkt", "teknosa",
+    "vatan", "gittigidiyor", "morhipo", "boyner", "tr", "türkiye",
+    "elektronik", "giyim", "kozmetik", "spor", "kitap", "market",
+    "ürün", "ürünleri", "ürünler", "lira", "ek", "varan", "kadar",
 }
+
+# v22.14 — Sözlüğe asla girmemesi gereken çöp kalıplar
+_COP_KELIME = {"var", "amazon", "tr", "indirimli", "fiyat", "yok",
+               "trendyol", "hepsiburada", "normal", "stokta", "market"}
 
 
 def ogren(urun_adi: str) -> int:
-    """Kaliteli bir ürün adından kelimeleri öğren. Döner: öğrenilen kelime sayısı."""
+    """Kaliteli bir ürün adından kelimeleri öğren. Döner: öğrenilen kelime sayısı.
+
+    v22.14: Ürün adı makul değilse HİÇ öğrenme (model zehirlenmesini önler).
+    'var Amazon TR', '- İndirimli Fiyat' gibi çöpten kelime öğrenmek
+    sözlüğü bozuyordu.
+    """
     if not urun_adi or len(urun_adi) < 4:
         return 0
+    # Makullük kapısı — çöp ürün adından öğrenme
+    try:
+        from services.analiz import _urun_adi_makul
+        if not _urun_adi_makul(urun_adi):
+            return 0
+    except Exception:
+        pass
     _ilk_kurulum()
     kelimeler = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü0-9]{2,}", urun_adi)
     ogrenilen = 0
@@ -51,7 +74,9 @@ def ogren(urun_adi: str) -> int:
         with db.cursor() as c:
             for k in kelimeler:
                 kl = k.replace("İ", "i").replace("I", "ı").lower()
-                if kl in _DURDUR or len(kl) < 2:
+                # Çöp kelime VEYA durdurma listesi VEYA salt rakam → atla
+                if (kl in _DURDUR or kl in _COP_KELIME or len(kl) < 2
+                        or kl.isdigit()):
                     continue
                 c.execute(
                     "INSERT INTO kelime_sozluk (kelime, sayi, ts) VALUES (?, 1, ?) "
@@ -97,3 +122,20 @@ def istatistik() -> dict:
             }
     except Exception:
         return {"toplam_kelime": 0, "guclu_kelime": 0, "en_sik": []}
+
+
+def zehir_temizle() -> dict:
+    """v22.14 — Sözlükteki çöp kelimeleri (var, amazon, tr...) sil.
+    Eski zehirlenmiş veriyi temizler. Döner: {silinen}."""
+    _ilk_kurulum()
+    silinen = 0
+    try:
+        with db.cursor() as c:
+            for kelime in (_COP_KELIME | _DURDUR):
+                cur = c.execute("DELETE FROM kelime_sozluk WHERE kelime=?", (kelime,))
+                silinen += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            # Salt rakam olan kelimeleri de sil
+            c.execute("DELETE FROM kelime_sozluk WHERE kelime GLOB '[0-9]*'")
+    except Exception as e:
+        log("UYARI", f"Sözlük zehir temizle: {e}")
+    return {"silinen": silinen}

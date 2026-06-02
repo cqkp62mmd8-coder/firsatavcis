@@ -88,6 +88,13 @@ def kaydet(urun_adi: str, kategori: str) -> None:
     """
     if not urun_adi or not kategori or kategori == "genel":
         return
+    # v22.14: Çöp ürün adından marka öğrenme (model zehirlenmesi önle)
+    try:
+        from services.analiz import _urun_adi_makul
+        if not _urun_adi_makul(urun_adi):
+            return
+    except Exception:
+        pass
     _yukle()
 
     adaylar = _ilk_kelimeleri_cek(urun_adi)
