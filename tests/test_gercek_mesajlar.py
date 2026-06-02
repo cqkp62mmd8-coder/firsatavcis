@@ -1105,3 +1105,183 @@ class TestV2212AmazonTRKokCozum:
         s = olustur("iPhone", 20, ["https://amazon.com.tr/dp/B0X"],
                     gemini={"urun_adi": "Apple iPhone 15 Pro"})
         assert s is not None
+
+
+class TestV2213CiplakLink:
+    """v22.13 — Çıplak link/domain ürün adı sanılma bug'ı (gerçek kök sebep)."""
+
+    def test_ciplak_link_urun_adi_olmaz(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_link"
+        os.makedirs("/tmp/test_link", exist_ok=True)
+        from services.analiz import urun_adi_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Link + mağaza adı → ürün adı çıkmamalı (link metni temizlenmeli)
+        assert urun_adi_bul("🔥 Amazon TR\n💰 8.259 TL\n🛒 amazon.com.tr/dp/B0XYZ") is None
+        assert urun_adi_bul("AMAZON TR ÜRÜNLERİ\nhttps://amazon.com.tr/dp/B1") is None
+
+    def test_gercek_urun_link_ile_gecer(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_link"
+        os.makedirs("/tmp/test_link", exist_ok=True)
+        from services.analiz import urun_adi_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Gerçek ürün + link → ürün adı link'ten arınmış olmalı
+        r1 = urun_adi_bul("Apple iPhone 15 Pro Max 256GB\n45000 TL\namazon.com.tr/dp/B0AP")
+        assert r1 and "amazon" not in r1.lower() and "iphone" in r1.lower()
+        r2 = urun_adi_bul("Bosch GSR 12V Matkap\nhttps://trendyol.com/bosch-p-9")
+        assert r2 and "trendyol" not in r2.lower() and "bosch" in r2.lower()
+
+    def test_ciplak_link_temizleme_fonksiyon(self):
+        from services.analiz import _karsilastir_ctasi_temizle
+        temiz = _karsilastir_ctasi_temizle("Ürün adı amazon.com.tr/dp/B0XYZ son")
+        assert "amazon.com.tr" not in temiz
+        assert "Ürün adı" in temiz
+
+
+class TestV2214ModelZehir:
+    """v22.14 — Model zehirlenmesi önleme (sözlük/marka/hafıza guard)."""
+
+    def test_sozluk_cop_ogrenmez(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_zehir"
+        os.makedirs("/tmp/test_zehir", exist_ok=True)
+        from utils import db; db.init()
+        from utils import sozluk
+        # Çöp ürün adı → 0 kelime
+        assert sozluk.ogren("var Amazon TR") == 0
+        assert sozluk.ogren("- İndirimli Fiyat var Amazon TR") == 0
+        # Gerçek ürün → öğrenir
+        assert sozluk.ogren("Apple iPhone 15 Pro Max") > 0
+
+    def test_sozluk_cop_kelime_atlanir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_zehir2"
+        os.makedirs("/tmp/test_zehir2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import sozluk
+        # Gerçek üründe çöp kelime geçse bile o kelime atlanmalı
+        sozluk.ogren("Samsung Galaxy Amazon TR")  # Samsung galaxy öğrenilir, amazon/tr hayır
+        assert not sozluk.urun_kelimesi_mi("amazon")
+        assert not sozluk.urun_kelimesi_mi("tr")
+
+    def test_zehir_temizleme(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_zehir3"
+        os.makedirs("/tmp/test_zehir3", exist_ok=True)
+        from utils import db; db.init()
+        from utils import sozluk
+        # Kirli veri ekle
+        with db.cursor() as c:
+            for k in ["var", "amazon", "tr", "456"]:
+                c.execute("INSERT OR REPLACE INTO kelime_sozluk (kelime,sayi,ts) VALUES (?,10,0)", (k,))
+            c.execute("INSERT OR REPLACE INTO kelime_sozluk (kelime,sayi,ts) VALUES ('keratin',5,0)")
+        sozluk.zehir_temizle()
+        assert not sozluk.urun_kelimesi_mi("amazon")
+        assert not sozluk.urun_kelimesi_mi("var")
+        # Temiz kelime kalmalı
+        assert sozluk.urun_kelimesi_mi("keratin")
+
+    def test_hafiza_cop_kaydetmez(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_zehir4"
+        os.makedirs("/tmp/test_zehir4", exist_ok=True)
+        from utils import db; db.init()
+        from utils import urun_hafiza
+        # Çöp kaydedilmemeli (hata fırlatmadan sessizce atlar)
+        urun_hafiza.kaydet("Amazon TR", "http://x", "market")
+        urun_hafiza.kaydet("- İndirimli Fiyat var", None, "market")
+        # Gerçek ürün kaydedilir
+        urun_hafiza.kaydet("Apple iPhone 15", "http://y", "elektronik")
+
+
+class TestV230MerkeziKapi:
+    """v23.0 — TEK MERKEZİ ÜRÜN ADI KAPISI (validation gateway).
+    Ürün adı hangi kaynaktan gelirse gelsin tek noktadan geçer."""
+
+    def test_kapi_magaza_adi_red(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for cop in ["Amazon", "amazon", "AMAZON", "Amazon TR", "Trendyol",
+                    "Amazon TR ürünleri", "Amazon Türkiye", "Hepsiburada mağaza"]:
+            assert gecerli_urun_adi(cop) is None, f"'{cop}' geçti"
+
+    def test_kapi_jenerik_red(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for cop in ["İndirimli", "İndirimli Fiyat", "Normal Fiyat", "elektronik",
+                    "Tüm elektronik", "stokta var", "- İndirimli Fiyat var Amazon TR",
+                    "Süper indirim", "Mega fırsat", "TR"]:
+            assert gecerli_urun_adi(cop) is None, f"'{cop}' geçti"
+
+    def test_kapi_gercek_urun_kabul(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for gercek in ["Apple iPhone 15 Pro Max", "Nike Air Max", "Bosch Matkap",
+                       "Korku Modern Klasikler Serisi", "Samsung Galaxy S24",
+                       "Nivea Krem", "Amazon Echo Dot", "iPhone 15 Amazon",
+                       "Süper Lig Topu"]:
+            assert gecerli_urun_adi(gercek) is not None, f"'{gercek}' reddedildi"
+
+    def test_kapi_ml_yapisal_entegrasyon(self):
+        """urun_adi_bul çıkışı kapıdan geçmeli."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kapi_ent"
+        os.makedirs("/tmp/test_kapi_ent", exist_ok=True)
+        from services.analiz import urun_adi_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Mağaza+link → None
+        assert urun_adi_bul("🔥 Amazon TR\n💰 8.259 TL\namazon.com.tr/dp/B0X") is None
+        # Gerçek ürün → geçer
+        assert urun_adi_bul("Apple iPhone 15 Pro\n45000 TL\namazon.com.tr/dp/B1")
+
+    def test_kapi_scrape_entegrasyon(self):
+        """Scrape 'Amazon' başlığı kapıda elenmeli."""
+        from services.urun_kapisi import gecerli_urun_adi
+        # Scrape og:title="Amazon" senaryosu
+        assert gecerli_urun_adi("Amazon") is None
+        # Gerçek scrape başlığı
+        assert gecerli_urun_adi("Apple AirPods Pro 2. Nesil") is not None
+
+    def test_ayirt_edici_kelimeler(self):
+        from services.urun_kapisi import ayirt_edici_kelimeler
+        # Mağaza+jenerik → ayırt edici yok
+        assert ayirt_edici_kelimeler("Amazon TR ürünleri") == []
+        # Gerçek ürün → ayırt edici var
+        assert "iphone" in ayirt_edici_kelimeler("Apple iPhone 15")
+        assert "echo" in ayirt_edici_kelimeler("Amazon Echo Dot")
+
+
+class TestV231Sadelestirme:
+    """v23.1 — Sadeleştirme: tüm doğrulama merkezi kapıya delege edildi."""
+
+    def test_makul_kapiya_delege(self):
+        """_urun_adi_makul artık merkezi kapıya delege ediyor."""
+        from services.analiz import _urun_adi_makul
+        assert _urun_adi_makul("Amazon TR") is False
+        assert _urun_adi_makul("Apple iPhone 15") is True
+
+    def test_kupon_hala_engelleniyor(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        assert gecerli_urun_adi("Kupon: FIRSAT50") is None
+        assert gecerli_urun_adi("Kod: ABC123") is None
+
+    def test_anlamsiz_harf_engelleniyor(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        assert gecerli_urun_adi("AAAAAAAA") is None
+        assert gecerli_urun_adi("XXXXXXXX") is None
+
+    def test_sadelestirme_tam_akis(self):
+        """Sadeleştirilmiş sistem tüm senaryoları doğru işliyor."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_sade"
+        os.makedirs("/tmp/test_sade", exist_ok=True)
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Çöp
+        assert olustur("🏪 Amazon 🛒 TR\n8.259 TL\namazon.com.tr/dp/B0X", 48,
+                       ["https://amazon.com.tr/dp/B0X"]) is None
+        # Gerçek
+        assert olustur("Apple iPhone 15 Pro\n45000 TL\namazon.com.tr/dp/B1", 30,
+                       ["https://amazon.com.tr/dp/B1"]) is not None
