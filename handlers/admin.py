@@ -275,6 +275,9 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
         elif komut == "/zamanlama":
             await _zamanlama_panosu(event)
 
+        elif komut == "/temizle_zehir":
+            await _zehir_temizle(event)
+
         elif komut.startswith("/onayla"):
             await _karantina_karar(event, komut, onayla=True)
 
@@ -1669,3 +1672,35 @@ async def _zamanlama_panosu(event) -> None:
             parse_mode="html")
     except Exception as e:
         await event.reply(f"⚠️ Zamanlama alınamadı: {e}", parse_mode="html")
+
+
+async def _zehir_temizle(event) -> None:
+    """v22.14 — Model zehirlenmesini temizle: kirli sözlük, marka, hafıza."""
+    try:
+        satirlar = ["🧹 <b>ZEHİR TEMİZLEME</b>", ""]
+        # Sözlük
+        try:
+            from utils import sozluk
+            r = sozluk.zehir_temizle()
+            satirlar.append(f"📖 Sözlük: {r['silinen']} çöp kelime silindi")
+        except Exception as e:
+            satirlar.append(f"📖 Sözlük: hata ({e})")
+        # Hafıza
+        try:
+            from utils import urun_hafiza
+            r = urun_hafiza.zehir_temizle()
+            satirlar.append(f"🧠 Hafıza: {r['silinen']} çöp ürün silindi")
+        except Exception as e:
+            satirlar.append(f"🧠 Hafıza: hata ({e})")
+        # Marka öğrenme — komple sıfırla (zaten az veri)
+        try:
+            from utils import marka_ogrenme
+            n = marka_ogrenme.temizle_hepsi()
+            satirlar.append(f"🏷️ Marka: {n} kayıt sıfırlandı")
+        except Exception as e:
+            satirlar.append(f"🏷️ Marka: hata ({e})")
+        satirlar.append("")
+        satirlar.append("✅ Model temizlendi. Yeni paylaşımlarla yeniden öğrenecek.")
+        await event.reply("\n".join(satirlar), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Temizleme hatası: {e}", parse_mode="html")
