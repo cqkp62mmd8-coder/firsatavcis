@@ -190,6 +190,14 @@ def urun_bilgisi(url: str) -> Optional[dict]:
 
     # Ürün adı — birden çok kaynaktan dene
     ad = (og.get("title") or tw.get("title") or jld.get("name", "")).strip()
+    # v23.0 — TEK MERKEZİ KAPI: scrape'ten gelen "Amazon" gibi çöp başlıkları ele.
+    # og:title bazen sayfa adını ("Amazon") döndürüyor — bu ürün adı değil.
+    try:
+        from services.urun_kapisi import gecerli_urun_adi
+        ad_dogrulanmis = gecerli_urun_adi(ad)
+        ad = ad_dogrulanmis or ""
+    except Exception:
+        pass
 
     # Görsel
     gorsel = og.get("image") or tw.get("image", "")

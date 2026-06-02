@@ -159,8 +159,10 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     lnk          = onceden_lnk or link_bul(metin, btn_links)
     magaza       = magaza_bul(metin, lnk)
     # Ürün adı: Gemini'nin temiz çıkardığı ad öncelikli
+    # v23.0 — TEK MERKEZİ KAPI'dan geçir
+    from services.urun_kapisi import gecerli_urun_adi as _kapi
     if gemini and gemini.get("urun_adi"):
-        urun = gemini["urun_adi"]
+        urun = _kapi(gemini["urun_adi"], metin) or urun_adi_bul(metin)
     else:
         urun = urun_adi_bul(metin)
     eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
@@ -345,10 +347,11 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     if negatif_mi(metin):
         return None
     # Ürün adı: Gemini varsa onu kullan (boş slogan kontrolü için)
-    # v22.12: Gemini ürün adı da makullük kontrolünden geçmeli (Amazon TR engeli)
+    # v23.0 — TEK MERKEZİ KAPI'dan geçir (Amazon vb çöp burada elenir)
+    from services.urun_kapisi import gecerli_urun_adi as _kapi2
     _g_urun = (gemini or {}).get("urun_adi")
-    if _g_urun and _urun_adi_makul(_g_urun):
-        _urun = _g_urun
+    if _g_urun:
+        _urun = _kapi2(_g_urun, metin) or urun_adi_bul(metin)
     else:
         _urun = urun_adi_bul(metin)
     _tur_on = indirim_turu(metin)
@@ -438,33 +441,19 @@ def _sablon_kalite_gecer(cikti: str, urun: str | None, link: str | None,
         # Bu jenerik adlar sadece marka kampanyasında kabul (gerçek ürün değil)
         if tur != "marka":
             return False
-    # v22.5 — KÖKTEN ÇÖZÜM: Ürün adı bir mağaza adı / jenerik kategori ise
-    # ASLA paylaşılmamalı (marka türünde bile değil — bunlar çöp).
-    # Bot "Amazon TR" / "elektronik" gibi adları başlık yapıyordu.
-    _COP_BASLIK = {
-        "amazon", "amazon tr", "trendyol", "hepsiburada", "n11",
-        "mediamarkt", "media markt", "teknosa", "vatan", "vatan bilgisayar",
-        "elektronik", "giyim", "ev", "kozmetik", "spor", "kitap",
-        "oyuncak", "mobilya", "bahçe", "otomotiv", "indirimli",
-    }
+    # v23.1 — Ürün adı doğrulaması TEK merkezi kapıda (urun_kapisi).
+    # Eskiden buradaki _COP_BASLIK listesi kapıyla tekrar ediyordu.
     if urun:
-        ad_lower = urun.strip().replace("İ", "i").replace("I", "ı").lower()
-        if ad_lower in _COP_BASLIK:
-            return False
+        try:
+            from services.urun_kapisi import gecerli_mi
+            if not gecerli_mi(urun):
+                return False
+        except Exception:
+            pass
 
     # Fiyat satırı varsa ama "0 TL" / boş fiyat → bozuk
     if "🟢 <b> TL" in cikti or "🟢 <b>0 TL" in cikti:
         return False
-    # Site/mağaza adı ürün adı yerine geçmiş mi? ("Amazon TR ürünleri",
-    # "Trendyol kampanyası" gibi jenerik başlıklar) — gerçek ürün adı yoksa
-    # ve indirim türü "marka" DEĞİLSE, bu çöp paylaşımdır → reddet.
-    if tur != "marka":
-        for magaza in config.MAGAZA_EMOJI.keys():
-            if (f"<b>{magaza} ürünleri</b>" in cikti
-                    or f"<b>{magaza} kampanyası</b>" in cikti
-                    or f"<b>{magaza} • " in cikti
-                    or f"<b>{magaza}</b>" in cikti):   # v22.5: sade mağaza adı da çöp
-                return False
     return True
 
 

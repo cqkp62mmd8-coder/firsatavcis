@@ -450,6 +450,14 @@ def urun_adi_bul(metin: str) -> str | None:
         return onbellek if onbellek != "__NONE__" else None
 
     sonuc = _urun_adi_bul_hesapla(metin)
+    # v23.0 — TEK MERKEZİ KAPI: ML/yapısal sonuç da buradan geçer.
+    # "Amazon", "İndirimli Fiyat" gibi çöp burada kesinlikle elenir.
+    if sonuc is not None:
+        try:
+            from services.urun_kapisi import gecerli_urun_adi
+            sonuc = gecerli_urun_adi(sonuc, metin)
+        except Exception:
+            pass
     _cache_koy(metin, "urun_adi", sonuc if sonuc is not None else "__NONE__")
     return sonuc
 
@@ -566,6 +574,13 @@ def _karsilastir_ctasi_temizle(metin: str) -> str:
     s = metin
     # 1. Markdown link: [metin](url) → sil (CTA linkleri)
     s = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", " ", s)
+    # 1b. v22.13 KÖK ÇÖZÜM: Çıplak URL'ler ve domain'ler → sil.
+    #     "amazon.com.tr/dp/B0XYZ" gibi linkler ürün adı sanılıyordu.
+    s = re.sub(r"https?://\S+", " ", s)                       # http(s):// linkler
+    s = re.sub(r"\bwww\.\S+", " ", s)                          # www. linkler
+    # Çıplak domain + yol: "amazon.com.tr/dp/...", "hepsiburada.com/...", "amzn.to/..."
+    s = re.sub(r"\b[\w-]+\.(?:com|net|org|tr|gl|to|co|biz)(?:\.\w+)?(?:/\S*)?",
+               " ", s, flags=re.IGNORECASE)
     # 2. Köşeli parantezli CTA: [🔍 Google'da Karşılaştır] → sil
     s = re.sub(r"\[[^\]]*(?:karşılaştır|karsilastir|google|compare)[^\]]*\]",
                " ", s, flags=re.IGNORECASE)
@@ -589,107 +604,22 @@ def _karsilastir_ctasi_temizle(metin: str) -> str:
 
 
 def _urun_adi_makul(ad: str) -> bool:
-    """Çıkarılan ürün adı makul mü? Fiyat/rakam/mağaza/kampanya çöpünü reddet.
-    ('490 04 İndirim İndirimli', 'Normal Fiyat İndirimli', 'Amazon TR',
-    'elektronik', 'Apple markasında' gibi)."""
+    """Çıkarılan ürün adı makul mü?
+
+    v23.1 SADELEŞTİRME: Asıl doğrulama services.urun_kapisi.gecerli_urun_adi
+    içinde (TEK merkezi nokta). Bu fonksiyon sadece o kapıya delege eder +
+    geriye dönük uyumluluk sağlar. Eskiden buradaki şişkin kara liste
+    (mağaza/jenerik/kampanya kelimeleri) merkezi kapıyla tekrar ediyordu.
+    """
     if not ad or len(ad) < 4:
         return False
-
-    # v22.5 — KÖKTEN ÇÖZÜM: Mağaza adı / jenerik kategori / kampanya kelimesi
-    # ürün adı olarak DAHA EN BAŞTA reddedilir. Aksi halde bot "Amazon TR" gibi
-    # mağaza adlarını ya da "elektronik" gibi kategori adlarını ürün sanıyor.
-    _CÖP_AD = {
-        # Mağaza adları — asla tek başına ürün adı olamaz
-        "amazon", "amazon tr", "trendyol", "hepsiburada", "n11", "mediamarkt",
-        "media markt", "teknosa", "vatan", "vatan bilgisayar", "gittigidiyor",
-        "morhipo", "boyner", "lcwaikiki", "lcw", "defacto", "carrefoursa",
-        "a101", "bim", "migros", "şok", "sok", "ikea", "decathlon",
-        # Jenerik kategori adları — ürün değil kategori
-        "elektronik", "giyim", "ev", "kozmetik", "spor", "kitap", "oyuncak",
-        "mobilya", "beyaz eşya", "küçük ev aletleri", "bahçe", "otomotiv",
-        "anne bebek", "yapı market", "yapı", "bilgisayar",
-        # Kampanya / bağlam kelimeleri (tek başına)
-        "indirimli", "indirim", "kampanya", "fırsat", "markasında",
-        "ürünlerinde", "ürünlerde", "kampanyası", "sepette", "amazon'da",
-        "trendyol'da", "hepsiburada'da", "amazon da", "trendyol da",
-        # Kampanya niteleyicileri — "Tüm elektronik", "Seçili giyim" gibi
-        "tüm", "tum", "seçili", "secili", "çeşitli", "cesitli", "binlerce",
-        "tüm ürünlerde", "seçili ürünlerde",
-    }
-    _FIYAT_BAGLAM = {
-        "fiyat", "fiyatı", "indirim", "indirimli", "normal", "tl", "₺",
-        "lira", "ucuz", "kampanya", "fırsat", "fırsatı", "tasarruf", "adet",
-        "düşüyor", "düştü", "sepette", "sepete", "özel", "plus", "pass",
-        "kupon", "kargo", "ücretsiz", "varan", "varana", "kadar", "ile",
-        "altındaki", "ürünün", "özel'e", "sadece", "şimdi", "hemen",
-    }
-    def _tr_lower(s: str) -> str:
-        return s.replace("İ", "i").replace("I", "ı").lower()
-
-    # KARA LİSTE KONTROL — tek başına bir mağaza/kategori/kampanya adı mı?
-    # Noktalama (':', '.', ',', '!') temizlenmiş halini de kontrol et
-    tl_ad = _tr_lower(ad.strip())
-    tl_ad_temiz = re.sub(r"[^\wçğıöşü ]+", "", tl_ad, flags=re.UNICODE).strip()
-    if tl_ad in _CÖP_AD or tl_ad_temiz in _CÖP_AD:
-        return False
-    # Kelimelerin %75'inden fazlası kara listedeyse → çöp
-    kelimeler_tl = [
-        re.sub(r"[^\wçğıöşü]+", "", _tr_lower(k), flags=re.UNICODE)
-        for k in ad.split()
-    ]
-    kelimeler_tl = [k for k in kelimeler_tl if k]
-    if kelimeler_tl:
-        cop_oran = sum(1 for k in kelimeler_tl if k in _CÖP_AD) / len(kelimeler_tl)
-        if cop_oran >= 0.75:
-            return False
-
-    # v22.12 KÖK ÇÖZÜM: Bir mağaza adı geçiyorsa ("amazon", "trendyol" vb) VE
-    # geri kalan kelimeler sadece jenerik/bağlam ise → çöp.
-    # "Amazon TR ürünleri", "Trendyol kampanya" gibi varyasyonları yakalar.
-    _MAGAZA_KOK = {"amazon", "trendyol", "hepsiburada", "n11", "mediamarkt",
-                   "media", "teknosa", "vatan", "gittigidiyor", "morhipo",
-                   "boyner", "carrefoursa", "carrefour", "migros", "a101",
-                   "bim", "şok", "sok", "ikea", "decathlon", "gratis"}
-    _JENERIK_EK = {"tr", "türkiye", "turkiye", "ürünleri", "urunleri", "ürün",
-                   "urun", "ürünler", "urunler", "mağaza", "magaza", "store",
-                   "official", "resmi", "com", "shop"}
-    if kelimeler_tl:
-        magaza_gecti = any(k in _MAGAZA_KOK for k in kelimeler_tl)
-        # Mağaza dışındaki kelimeler tamamen jenerik/çöp/ek mi?
-        kalan = [k for k in kelimeler_tl if k not in _MAGAZA_KOK]
-        kalan_hepsi_jenerik = all(
-            (k in _JENERIK_EK or k in _CÖP_AD) for k in kalan
-        ) if kalan else True
-        if magaza_gecti and kalan_hepsi_jenerik:
-            return False
-    # "X markasında" / "X ürünlerinde" → kampanya satırı, ürün değil
-    if re.search(r"\b(markasında|ürünlerinde|ürünlerde|kategorisinde|serisinde)\b",
-                 ad, re.I):
-        return False
-
-    kelimeler = ad.split()
-    anlamli = [
-        k for k in kelimeler
-        if _tr_lower(k) not in _FIYAT_BAGLAM
-        and _tr_lower(k) not in _CÖP_AD
-        and re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]{3,}", k)
-    ]
-    if not anlamli:
-        return False
-    # Rakam oranı çok yüksekse → fiyat çöpü
-    rakam = sum(1 for c in ad if c.isdigit())
-    if rakam > len(ad.replace(" ", "")) * 0.4:
-        return False
-    if re.match(r"^\s*(kupon|kod|indirim\s*kodu)\s*[:=]", ad, re.I):
-        return False
-    if len(kelimeler) == 1:
-        tek = kelimeler[0]
-        if tek.isupper() and len(tek) >= 4:
-            return False
-        harfler = [c for c in tek if c.isalpha()]
-        if harfler and len(set(harfler)) == 1:
-            return False
-    return True
+    try:
+        from services.urun_kapisi import gecerli_mi
+        return gecerli_mi(ad)
+    except Exception:
+        # Kapı yüklenemezse temel güvenlik: salt rakam/çok kısa reddet
+        harf = sum(1 for c in ad if c.isalpha())
+        return harf >= 3
 
 
 def _urun_adi_bul_yapisal(metin: str) -> str | None:
