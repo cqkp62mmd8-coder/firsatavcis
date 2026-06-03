@@ -1687,3 +1687,62 @@ class TestV2311SozlukTemizlik:
         assert not sozluk.urun_kelimesi_mi("ek", min_sayi=1), "2 harfli 'ek' silinmedi"
         assert sozluk.urun_kelimesi_mi("makinesi", min_sayi=1), "Gerçek kelime silindi"
         assert sozluk.urun_kelimesi_mi("s24", min_sayi=1), "Model kodu s24 silindi"
+
+
+class TestV2313OlculuUrunler:
+    """v23.13 — '125mm', '20ll' gibi ölçülü kelimeler 'tek-tip harf' (mm, ll)
+    sanılıp reddediliyordu. WORX matkabı gibi aletler atlanıyordu."""
+
+    def test_olculu_urun_gecer(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        ad = "WORX WX803 20Volt 2.0/4.0 Ah Li-ion 125mm Avuç Taşlama"
+        assert gecerli_urun_adi(ad) is not None, "Ölçülü ürün reddedildi"
+
+    def test_olcu_birimleri_korunur(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for ad in ["Makita 125mm Taşlama", "Bosch 18V Matkap", "Dewalt 20V Vidalama"]:
+            assert gecerli_urun_adi(ad) is not None, f"Ölçülü ürün reddedildi: {ad}"
+
+    def test_gercek_tektip_hala_red(self):
+        """Rakamsız tek-tip harf (AAAA) hâlâ reddedilmeli."""
+        from services.urun_kapisi import gecerli_urun_adi
+        assert gecerli_urun_adi("AAAA") is None
+        assert gecerli_urun_adi("Amazon TR") is None
+
+    def test_worx_paylasilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_worx"
+        os.makedirs("/tmp/test_worx", exist_ok=True)
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        mesaj = "📦 WORX WX803 20Volt 125mm Avuç Taşlama\n💰10.706 TL\n🏪 Amazon"
+        s = olustur(mesaj, 0, ["https://amazon.com.tr/dp/B0X"],
+                    gemini={"urun_adi": "WORX WX803 Avuç Taşlama", "kategori": "genel",
+                            "reklam": False, "tanitim": "", "fiyat_uyari": "",
+                            "kalite": 4, "fiyat": 0, "eski_fiyat": 0})
+        assert s and "WORX" in s, "WORX ürünü atlandı"
+
+
+class TestV2314KarakutuFormatla:
+    """v23.14 — karakutu.formatla eksikti (DB taşımada silinmiş), /karakutu çöküyordu."""
+
+    def test_formatla_calisir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kkf"
+        os.makedirs("/tmp/test_kkf", exist_ok=True)
+        from utils import db; db.init()
+        from utils import karakutu
+        karakutu.kaydet("paylasim", "Test ürün")
+        m = karakutu.formatla(15)
+        assert m and "Test ürün" in m, "formatla çalışmıyor"
+
+    def test_formatla_bos_durum(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kkf2"
+        os.makedirs("/tmp/test_kkf2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import karakutu
+        # Boş karakutuda da çökmemeli
+        m = karakutu.formatla(15)
+        assert isinstance(m, str)

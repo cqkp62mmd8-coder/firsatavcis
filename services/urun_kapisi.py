@@ -117,7 +117,11 @@ def gecerli_urun_adi(aday: str | None, kaynak_metin: str = "") -> str | None:
         return None
 
     # v23.1 — Anlamsız tek-tip harf dizisi (AAAA, XXXX) → ürün değil
+    # v23.13 — AMA rakam içeren kelimeler (125mm, 20ll, 2tt) ölçü/model
+    # kodudur, "mm"/"ll" tek-tip harf olsa bile reddedilmemeli.
     for k in ayirt:
+        if any(c.isdigit() for c in k):
+            continue  # rakam içeriyor → ölçü/model kodu, atla
         harfler = [c for c in k if c.isalpha()]
         if len(k) >= 4 and harfler and len(set(harfler)) == 1:
             return None

@@ -117,3 +117,27 @@ def sessiz_hata(modul: str, e: Exception, baglam: str = "") -> None:
         kaydet("hata", detay[:200])
     except Exception:
         pass  # karakutu bile yazamıyorsa, en azından bot çökmesin
+
+
+def formatla(n: int = 15) -> str:
+    """Son N olayı okunabilir metin olarak döndür (/karakutu için).
+
+    v23.14 — karakutu DB'ye taşınınca (v23.7) bu fonksiyon silinmişti ama
+    /karakutu komutu hâlâ çağırıyordu → 'no attribute formatla' hatası.
+    """
+    import datetime
+    olaylar = son_olaylar(n)
+    if not olaylar:
+        return "(henüz olay yok)"
+    satirlar = []
+    ikon = {"paylasim": "📤", "hata": "❌", "model": "🧠",
+            "sistem": "⚙️", "mesaj": "📨"}
+    for o in olaylar:
+        try:
+            saat = datetime.datetime.fromtimestamp(o["ts"]).strftime("%H:%M")
+        except Exception:
+            saat = "??:??"
+        sim = ikon.get(o["tur"], "•")
+        detay = (o.get("detay") or "")[:55]
+        satirlar.append(f"{saat} {sim} {detay}")
+    return "\n".join(satirlar)
