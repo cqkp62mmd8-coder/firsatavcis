@@ -434,6 +434,43 @@ def _cache_koy(metin: str, fonk_adi: str, sonuc) -> None:
     _mesaj_cache[_mesaj_anahtar(metin, fonk_adi)] = sonuc
 
 
+def _ilk_satir_urun_adi(metin: str) -> str | None:
+    """Mesajın ilk satırından ürün adını çıkar (📦 işareti ve gürültü temiz).
+
+    v23.8 — Kaynak kanallar ürün adını ilk satıra koyar. Bu satır yeterince
+    uzun + ürün adı niteliğindeyse (fiyat/indirim satırı değilse) döndürülür.
+    """
+    if not metin:
+        return None
+    ilk = metin.split("\n", 1)[0].strip()
+    # Baştaki emoji/işaretleri temizle (📦 🔥 ⚡ vb.)
+    ilk = re.sub(r"^[\W_]*(📦|🛍|🔥|⚡|🎯|🟢|💰|🆕|✨|�run)?\s*", "", ilk).strip()
+    ilk = re.sub(r"^[^\w]+", "", ilk).strip()
+    if len(ilk) < 8:
+        return None
+    # Fiyat/indirim/stok satırıysa ürün adı değil
+    low = ilk.replace("İ","i").replace("I","ı").lower()
+    if any(x in low for x in ["indirimli fiyat", "normal fiyat", "stokta",
+                               "indirim:", "fiyat:", "google'da", "karşılaştır"]):
+        return None
+    # v23.8 — Slogan/CTA satırı ürün adı değil ("Stoklar ERİYOR hemen yakala")
+    _slogan_kelime = ["eriyor", "yakala", "kaçırma", "kacirma", "acele",
+                      "tükeniyor", "tukeniyor", "son fırsat", "son firsat",
+                      "hemen al", "kaçmaz", "bitiyor", "stoklar"]
+    if any(x in low for x in _slogan_kelime):
+        return None
+    # Sadece rakam/sembol ise değil
+    if not re.search(r"[a-zçğıöşü]{3,}", low):
+        return None
+    # "Google'da Karşılaştır #İşbirliği" gibi kuyrukları kes
+    ilk = re.split(r"\s*🔍|\s*#İşbirliği|\s*Google'da", ilk)[0].strip()
+    # Çok uzunsa makul yere kadar kısalt (ilk ~12 kelime yeter)
+    kelimeler = ilk.split()
+    if len(kelimeler) > 14:
+        ilk = " ".join(kelimeler[:14])
+    return ilk if len(ilk) >= 8 else None
+
+
 def urun_adi_bul(metin: str) -> str | None:
     """Mesajdan ürün adını çıkarır. v22.2: cache eklendi (P3).
 
@@ -450,6 +487,29 @@ def urun_adi_bul(metin: str) -> str | None:
         return onbellek if onbellek != "__NONE__" else None
 
     sonuc = _urun_adi_bul_hesapla(metin)
+
+    # v23.8 — İLK SATIR ÖNCELİĞİ: Kaynak kanallar ürün adını HER ZAMAN ilk
+    # satıra (📦 ...) koyar. ML/yapısal yöntem uzun virgüllü adlarda bazen
+    # ortadan kopuk parça çıkarıyor ("Apple iPad: ... — Gümüş" → "Gün Süren
+    # Pil Ömrü Gümüş"). İlk satır temiz bir ürün adıysa onu tercih et.
+    try:
+        ilk_satir = _ilk_satir_urun_adi(metin)
+        if ilk_satir:
+            # İlk satır sonuçtan FARKLI ve sonuç ilk satırın ortasından bir
+            # parçaysa (ilk satır sonucu içeriyor ama sonuç baştan başlamıyor)
+            # → ilk satırı kullan
+            if not sonuc:
+                sonuc = ilk_satir
+            elif sonuc != ilk_satir:
+                _il = ilk_satir.replace("İ","i").replace("I","ı").lower()
+                _so = sonuc.replace("İ","i").replace("I","ı").lower()
+                # Sonuç ilk satırın BAŞIYLA örtüşmüyorsa → ML/yapısal ortadan
+                # kopuk parça almış → güvenilir ilk satırı kullan.
+                if not _il.startswith(_so[:12]):
+                    sonuc = ilk_satir
+    except Exception:
+        pass
+
     # v23.0 — TEK MERKEZİ KAPI: ML/yapısal sonuç da buradan geçer.
     # "Amazon", "İndirimli Fiyat" gibi çöp burada kesinlikle elenir.
     if sonuc is not None:

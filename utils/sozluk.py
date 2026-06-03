@@ -43,6 +43,10 @@ _DURDUR = {
     "vatan", "gittigidiyor", "morhipo", "boyner", "tr", "türkiye",
     "elektronik", "giyim", "kozmetik", "spor", "kitap", "market",
     "ürün", "ürünleri", "ürünler", "lira", "ek", "varan", "kadar",
+    # v23.11 — Botun KENDİ şablon kelimeleri (kendinden öğrenmeyi önle)
+    "marka", "kampanyası", "kampanyasi", "elit", "fırsat", "firsat",
+    "ürünü", "urunu", "ye", "ya", "den", "dan", "satıcı", "satici",
+    "depo", "resmi", "official", "garantili", "garanti",
 }
 
 # v22.14 — Sözlüğe asla girmemesi gereken çöp kalıplar
@@ -74,9 +78,12 @@ def ogren(urun_adi: str) -> int:
         with db.cursor() as c:
             for k in kelimeler:
                 kl = k.replace("İ", "i").replace("I", "ı").lower()
-                # Çöp kelime VEYA durdurma listesi VEYA salt rakam → atla
-                if (kl in _DURDUR or kl in _COP_KELIME or len(kl) < 2
-                        or kl.isdigit()):
+                # v23.11 — Çöp/durdurma/salt-rakam VEYA 3 harften kısa → atla.
+                # 2 harfli "ye", "ek" gibi ek/parçalar sözlüğü kirletiyordu.
+                # (Model kodları "s24" rakam içerir, onlar zaten 3+ karakter.)
+                harf_say = sum(1 for c2 in kl if c2.isalpha())
+                if (kl in _DURDUR or kl in _COP_KELIME or kl.isdigit()
+                        or (harf_say > 0 and harf_say < 3 and not any(c2.isdigit() for c2 in kl))):
                     continue
                 c.execute(
                     "INSERT INTO kelime_sozluk (kelime, sayi, ts) VALUES (?, 1, ?) "
@@ -136,6 +143,12 @@ def zehir_temizle() -> dict:
                 silinen += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             # Salt rakam olan kelimeleri de sil
             c.execute("DELETE FROM kelime_sozluk WHERE kelime GLOB '[0-9]*'")
+            # v23.11 — 2 harften kısa kelimeleri sil ("ye", "ek" gibi parçalar)
+            # (rakam içerenler model kodu olabilir, onları koru)
+            cur2 = c.execute(
+                "DELETE FROM kelime_sozluk WHERE length(kelime) < 3 "
+                "AND kelime NOT GLOB '*[0-9]*'")
+            silinen += cur2.rowcount if cur2.rowcount and cur2.rowcount > 0 else 0
     except Exception as e:
         log("UYARI", f"Sözlük zehir temizle: {e}")
     return {"silinen": silinen}

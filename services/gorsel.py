@@ -111,10 +111,12 @@ def _qr_kod_uret(link: str, boyut: int) -> Image.Image | None:
         return None
 
 
-def logo_ekle(gorsel_bytes: bytes, link: str | None = None) -> bytes:
+def logo_ekle(gorsel_bytes: bytes, link: str | None = None,
+              indirim: int = 0) -> bytes:
     """Ürün görseline:
     - Alt-orta: marka logosu (PNG, saydam)
     - Sol-alt: QR kod (link verilirse, beyaz arkaplanlı)
+    - Sağ-üst: indirim rozeti (%X, indirim >= 20 ise) — v23.9
     Çıktı: PNG byte dizisi.
     Hata durumunda orijinali döndürür."""
     if not os.path.exists(config.LOGO_DOSYA):
@@ -154,6 +156,36 @@ def logo_ekle(gorsel_bytes: bytes, link: str | None = None) -> bytes:
                 qx = 12
                 qy = h - kart_h - 12
                 urun.paste(kart, (qx, qy), kart)
+
+        # ─ 4. İndirim rozeti (sağ-üst) — v23.9 ───────────────
+        # Görsel önce görünür; çarpıcı %X rozeti dikkat çeker.
+        if indirim and indirim >= 20:
+            try:
+                from PIL import ImageDraw, ImageFont
+                cap = max(70, min(150, int(w * 0.16)))   # rozet çapı
+                marj = max(10, int(w * 0.02))
+                # Kırmızı daire
+                rozet = Image.new("RGBA", (cap, cap), (0, 0, 0, 0))
+                rd = ImageDraw.Draw(rozet)
+                rd.ellipse([0, 0, cap - 1, cap - 1], fill=(220, 38, 38, 235))
+                rd.ellipse([0, 0, cap - 1, cap - 1], outline=(255, 255, 255, 255),
+                           width=max(2, cap // 30))
+                # Yazı: %X
+                yazi = f"%{indirim}"
+                try:
+                    fnt = ImageFont.truetype(
+                        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                        size=max(20, cap // 3))
+                except Exception:
+                    fnt = ImageFont.load_default()
+                bb = rd.textbbox((0, 0), yazi, font=fnt)
+                tw, th = bb[2] - bb[0], bb[3] - bb[1]
+                rd.text(((cap - tw) / 2 - bb[0], (cap - th) / 2 - bb[1]),
+                        yazi, font=fnt, fill=(255, 255, 255, 255))
+                # Sağ-üst köşeye yapıştır
+                urun.paste(rozet, (w - cap - marj, marj), rozet)
+            except Exception as e:
+                log("UYARI", f"İndirim rozeti hatası: {e}")
 
         cikti = BytesIO()
         urun.save(cikti, format="PNG", optimize=True)

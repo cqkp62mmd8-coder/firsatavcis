@@ -125,8 +125,18 @@ def tam_teshis() -> list[dict]:
         # "amazon" ÖĞRENİLMEMİŞ olmalı (zehir kontrolü)
         if sozluk.urun_kelimesi_mi("amazon"):
             raise ValueError("SÖZLÜK ZEHİRLİ: 'amazon' öğrenilmiş!")
+        # v23.11 — Kod versiyonu kontrolü: yeni çöp listesi yüklü mü?
+        # "marka" _DURDUR'da olmalı; değilse ESKİ KOD çalışıyor demektir.
+        try:
+            durdur = getattr(sozluk, "_DURDUR", set())
+            if "marka" not in durdur or "ye" not in durdur:
+                raise ValueError("ESKİ KOD! sozluk.py güncellenmemiş (deploy sorunu)")
+        except ValueError:
+            raise
+        except Exception:
+            pass
         ist = sozluk.istatistik()
-        return f"{ist.get('toplam_kelime', 0)} kelime, temiz"
+        return f"{ist.get('toplam_kelime', 0)} kelime, kod güncel ✓"
     sonuclar.append(_test("Sözlük (zehir kontrolü)", _sozluk))
 
     # 13. Veritabanı

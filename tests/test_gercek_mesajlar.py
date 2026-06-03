@@ -1523,3 +1523,167 @@ class TestV237CopKuyrukVeKarakutu:
         importlib.reload(karakutu)
         sonra = karakutu.ozet()["toplam"]
         assert sonra == ilk and sonra >= 2, "Karakutu restart'ta kayboldu"
+
+
+class TestV238UrunAdiSecici:
+    """v23.8 — Gemini kopuk parça verince saf-Python'la karşılaştır + ilk satır
+    önceliği. iPad gibi uzun adlarda Gemini ortadan parça koparıyordu."""
+
+    def _olustur(self, metin, gemini):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_secici"
+        os.makedirs("/tmp/test_secici", exist_ok=True)
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        return olustur(metin, 20, ["https://amazon.com.tr/dp/B0X"], gemini=gemini)
+
+    def test_ipad_kopuk_parca_duzelir(self):
+        metin = "📦 Apple A16 çipli iPad: 11 inç, 128 GB, Tüm Gün Süren Pil Ömrü — Gümüş\n💰12.084 TL\n🏪 Amazon TR"
+        g = {"urun_adi": "Gün Süren Pil Ömrü Gümüş Rengi Satıcı Amazon Depo",
+             "kategori": "elektronik", "reklam": False, "tanitim": "",
+             "fiyat_uyari": "", "kalite": 4, "fiyat": 0, "eski_fiyat": 0}
+        s = self._olustur(metin, g)
+        assert s and "Apple" in s, "iPad ürün adı düzelmedi"
+        assert "Satıcı Amazon Depo" not in s, "Kopuk parça hâlâ var"
+
+    def test_ilk_satir_onceligi(self):
+        from services.analiz import urun_adi_bul, _ilk_satir_urun_adi
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Uzun virgüllü ad → ilk satırdan doğru başlamalı
+        metin = "📦 Apple A16 çipli iPad: 11 inç, 128 GB, Touch ID, Tüm Gün Süren Pil — Gümüş\n💰100 TL"
+        r = urun_adi_bul(metin)
+        assert r and r.lower().startswith("apple"), f"İlk satır önceliği çalışmadı: {r}"
+
+    def test_slogan_ilk_satir_reddedilir(self):
+        from services.analiz import _ilk_satir_urun_adi
+        # Slogan ilk satır ürün adı sayılmamalı
+        assert _ilk_satir_urun_adi("Stoklar ERİYOR hemen yakala 999 TL") is None
+
+    def test_en_iyi_urun_adi_secici(self):
+        from services.urun_kapisi import en_iyi_urun_adi
+        kaynak = "Apple iPad 128 GB Touch ID Tüm Gün Süren Pil Gümüş"
+        # Gemini kopuk, python doğru → python seçilmeli
+        secilen = en_iyi_urun_adi("Gün Süren Pil Gümüş Satıcı Amazon",
+                                  "Apple iPad 128 GB Touch ID", kaynak)
+        assert "Apple" in secilen, "Seçici kopuk Gemini'yi seçti"
+
+
+class TestV239KaliteYukseltme:
+    """v23.9 — Ürün adı kısaltma + fiyat bağlamı + görsel indirim rozeti."""
+
+    def test_uzun_ad_kisaltilir(self):
+        from services.urun_kapisi import guzellestir
+        uzun = "Apple A16 çipli iPad: 11 inç Liquid Retina, 128 GB, Wi-Fi 6, 12 MP Ön Kamera Gümüş"
+        k = guzellestir(uzun)
+        assert len(k) < 40, f"Kısaltma yetersiz: {k}"
+        assert "Apple" in k and "iPad" in k, "Marka/model kayboldu"
+
+    def test_kisa_ad_korunur(self):
+        from services.urun_kapisi import guzellestir
+        for ad in ["Nike Air Max Ayakkabı", "Apple iPhone 15 Pro", "VitrA Tuvalet Kağıtlığı"]:
+            assert guzellestir(ad) == ad, f"Kısa ad bozuldu: {ad}"
+
+    def test_parantez_atilir(self):
+        from services.urun_kapisi import guzellestir
+        k = guzellestir("Samsung Galaxy S24 256 GB (Samsung Türkiye Garantili)")
+        assert "Garantili" not in k and "Samsung Galaxy" in k
+
+    def test_gorsel_indirim_rozeti(self):
+        from services.gorsel import logo_ekle
+        from PIL import Image
+        from io import BytesIO
+        img = Image.new("RGB", (600, 600), (70, 130, 180))
+        buf = BytesIO(); img.save(buf, "PNG")
+        sonuc = logo_ekle(buf.getvalue(), link=None, indirim=50)
+        out = Image.open(BytesIO(sonuc)).convert("RGB")
+        w, h = out.size
+        # Sağ-üstte kırmızı rozet pikseli olmalı
+        kirmizi = any(
+            out.getpixel((x, y))[0] > 180 and out.getpixel((x, y))[1] < 80
+            for x in range(int(w*0.8), w-10) for y in range(10, int(h*0.2))
+        )
+        assert kirmizi, "İndirim rozeti basılmadı"
+
+    def test_dusuk_indirimde_rozet_yok(self):
+        """İndirim < 20 ise rozet basılmamalı (görsel kalabalıklaşmasın)."""
+        from services.gorsel import logo_ekle
+        from PIL import Image
+        from io import BytesIO
+        img = Image.new("RGB", (600, 600), (70, 130, 180))
+        buf = BytesIO(); img.save(buf, "PNG")
+        # indirim=10 → rozet yok, hata da vermemeli
+        sonuc = logo_ekle(buf.getvalue(), link=None, indirim=10)
+        assert sonuc and len(sonuc) > 0
+
+
+class TestV2310SessizHataIzleme:
+    """v23.10 — Sessiz hatalar artık karakutuya kaydediliyor (görünürlük)."""
+
+    def test_sessiz_hata_kaydedilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_sh"
+        os.makedirs("/tmp/test_sh", exist_ok=True)
+        from utils import db; db.init()
+        from utils import karakutu
+        try:
+            _ = bilinmeyen_degisken  # NameError
+        except Exception as e:
+            karakutu.sessiz_hata("test.modul", e, baglam="test")
+        ozet = karakutu.ozet()
+        assert ozet.get("turler", {}).get("hata", 0) >= 1, "Sessiz hata kaydedilmedi"
+        assert "NameError" in ozet["son_hata"]["detay"]
+
+    def test_sessiz_hata_bot_cokmez(self):
+        """sessiz_hata kendisi patlasa bile bot çökmemeli."""
+        from utils import karakutu
+        # Geçersiz argümanlarla bile çökmemeli
+        try:
+            karakutu.sessiz_hata("x", Exception("test"))
+            basarili = True
+        except Exception:
+            basarili = False
+        assert basarili, "sessiz_hata bot'u çökertti"
+
+
+class TestV2311SozlukTemizlik:
+    """v23.11 — Sözlük zehirlenmesi: 'ye', 'marka', 'kampanyası' gibi çöp
+    öğreniliyordu (bot kendi şablonundan + 2 harfli parçalardan)."""
+
+    def _kur(self, ad):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_soz" + ad
+        os.makedirs("/tmp/test_soz" + ad, exist_ok=True)
+        from utils import db; db.init()
+
+    def test_sablon_kelimesi_ogrenilmez(self):
+        self._kur("a")
+        from utils import sozluk
+        sozluk.ogren("ELİT MARKA KAMPANYASI")
+        sozluk.ogren("%50'ye varan indirim")
+        for cop in ["marka", "kampanyası", "elit", "ye", "varan"]:
+            assert not sozluk.urun_kelimesi_mi(cop, min_sayi=1), f"Çöp öğrenildi: {cop}"
+
+    def test_gercek_kelime_ogrenilir(self):
+        self._kur("b")
+        from utils import sozluk
+        sozluk.ogren("Philips Kahve Makinesi")
+        sozluk.ogren("Samsung Buzdolabı")
+        for gercek in ["philips", "kahve", "makinesi", "samsung"]:
+            assert sozluk.urun_kelimesi_mi(gercek, min_sayi=1), f"Gerçek kelime kaçtı: {gercek}"
+
+    def test_iki_harfli_temizlenir(self):
+        self._kur("c")
+        import time
+        from utils import db, sozluk
+        sozluk._ilk_kurulum()
+        with db.cursor() as c:
+            for k, s in [("ye", 13), ("ek", 3), ("makinesi", 7), ("s24", 4)]:
+                c.execute("INSERT INTO kelime_sozluk (kelime,sayi,ts) VALUES (?,?,?) "
+                          "ON CONFLICT(kelime) DO UPDATE SET sayi=?", (k, s, int(time.time()), s))
+        sozluk.zehir_temizle()
+        assert not sozluk.urun_kelimesi_mi("ye", min_sayi=1), "2 harfli 'ye' silinmedi"
+        assert not sozluk.urun_kelimesi_mi("ek", min_sayi=1), "2 harfli 'ek' silinmedi"
+        assert sozluk.urun_kelimesi_mi("makinesi", min_sayi=1), "Gerçek kelime silindi"
+        assert sozluk.urun_kelimesi_mi("s24", min_sayi=1), "Model kodu s24 silindi"

@@ -302,7 +302,7 @@ async def worker(
                         raise ValueError(f"görsel kalitesiz: {sebep}")
 
                     islenmis = await _loop.run_in_executor(
-                        None, lambda: logo_ekle(raw, link=lnk))
+                        None, lambda: logo_ekle(raw, link=lnk, indirim=indirim))
                     buf = BytesIO(islenmis)
                     buf.name = "urun.png"
                     kw = dict(file=buf, parse_mode="html", silent=sessiz)
@@ -350,8 +350,12 @@ async def worker(
                         if lnk and lnk not in tum_linkler:
                             tum_linkler = tum_linkler + [lnk]
                         duplicate.kaydet(tum_linkler, ad, kat, magaza, msg.id)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        try:
+                            from utils import karakutu
+                            karakutu.sessiz_hata("kuyruk.duplicate_kaydet", _e)
+                        except Exception:
+                            pass
                     # v22: Self-healing izleme — model bozulmasını yakala
                     # v22.1: HER PAYLAŞIMDA anlık kontrol — döngü beklemesin
                     try:
@@ -364,15 +368,23 @@ async def worker(
                             log("KRITIK", f"Self-heal anlık tetik: "
                                           f"'{tetik.get('kategori')}' "
                                           f"{tetik.get('tekrar')} kez tekrar etmişti")
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        try:
+                            from utils import karakutu
+                            karakutu.sessiz_hata("kuyruk.self_heal", _e)
+                        except Exception:
+                            pass
                     # v22.7 — Sistem 6: Kaliteli üründen kelime öğren (sözlük büyüsün)
                     try:
                         from utils import sozluk
                         if ad:
                             sozluk.ogren(ad)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        try:
+                            from utils import karakutu
+                            karakutu.sessiz_hata("kuyruk.sozluk_ogren", _e)
+                        except Exception:
+                            pass
                     # v22.7 — Sistem 7: Kara kutuya paylaşımı kaydet
                     try:
                         from utils import karakutu
@@ -400,8 +412,12 @@ async def worker(
                     try:
                         from utils import zamanlama
                         zamanlama.paylasim_kaydet()
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        try:
+                            from utils import karakutu
+                            karakutu.sessiz_hata("kuyruk.zamanlama", _e)
+                        except Exception:
+                            pass
                     # v22.10 — Sistem 4+5: Fiyat geçmişi + stok geri-gelme takibi
                     try:
                         from utils import fiyat_takip
@@ -425,8 +441,12 @@ async def worker(
                                     except ValueError:
                                         pass
                                 fiyat_takip.stok_kontrol(kim)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        try:
+                            from utils import karakutu
+                            karakutu.sessiz_hata("kuyruk.fiyat_takip", _e)
+                        except Exception:
+                            pass
                     # v22: Akıllı özet için mesaj_id'yi günlüğe iliştir
                     try:
                         from schedulers import gunluk as _gun

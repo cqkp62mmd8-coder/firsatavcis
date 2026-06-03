@@ -78,8 +78,12 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
         if tr_skor < 0.30:   # net yabancı
             log("FILTRE", f"Yabancı dil (TR skor={tr_skor:.2f}) → atlandı: '{onizleme}…'")
             return None
-    except Exception:
-        pass   # dil tanıma başarısız → devam et
+    except Exception as _e:
+        try:
+            from utils import karakutu
+            karakutu.sessiz_hata("mesaj.dil_tanima", _e)
+        except Exception:
+            pass   # dil tanıma başarısız → devam et
 
     indirim = indirim_oranini_bul(blok)
     lnk = link_bul(blok, btn_links)
@@ -99,9 +103,15 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
     # ── ÜRÜN ADI: Gemini varsa onun anlayışı, yoksa saf-Python ──
     # v23.0 — TEK MERKEZİ KAPI: Gemini'nin ürün adı da kapıdan geçer.
     # Hangi kaynaktan gelirse gelsin "Amazon" gibi çöp burada elenir.
-    from services.urun_kapisi import gecerli_urun_adi
+    from services.urun_kapisi import gecerli_urun_adi, en_iyi_urun_adi
     if gemini_sonuc and gemini_sonuc.get("urun_adi"):
-        urun = gecerli_urun_adi(gemini_sonuc["urun_adi"], blok) or urun_adi_bul(blok)
+        # v23.8 — Gemini bazen uzun ürün adının ORTASINDAN kopuk parça veriyor
+        # ("Apple iPad ... Gümüş Rengi" → "Gün Süren Pil Ömrü Gümüş Rengi").
+        # Gemini ile saf-Python'u karşılaştır: mesaj başıyla örtüşen doğrudur.
+        g_aday = gecerli_urun_adi(gemini_sonuc["urun_adi"], blok)
+        p_aday = gecerli_urun_adi(urun_adi_bul(blok), blok)
+        secilen = en_iyi_urun_adi(g_aday, p_aday, blok)
+        urun = secilen or p_aday or urun_adi_bul(blok)
     else:
         urun = urun_adi_bul(blok)
 
@@ -163,8 +173,12 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
                 if kurtarilan:
                     urun = kurtarilan
                     log("KURTARMA", f"Ürün adı orijinalden kurtarıldı: '{urun[:40]}'")
-            except Exception:
-                pass
+            except Exception as _e:
+                try:
+                    from utils import karakutu
+                    karakutu.sessiz_hata("mesaj.urun_kurtarma", _e)
+                except Exception:
+                    pass
         if not urun:
             log("FILTRE", f"Ürün adı çıkarılamadı → atlandı: '{onizleme}…'")
             try:
@@ -305,7 +319,7 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
     return {
         "blok": blok, "indirim": indirim, "link": lnk,
         "magaza": magaza, "kat": kat, "skor": skor, "fs": fs,
-        "gemini": gemini_sonuc,
+        "gemini": gemini_sonuc, "urun": urun,
     }
 
 

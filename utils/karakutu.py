@@ -101,3 +101,19 @@ def ozet() -> dict:
         return sonuc
     except Exception:
         return {"toplam": 0}
+
+
+def sessiz_hata(modul: str, e: Exception, baglam: str = "") -> None:
+    """v23.10 — Sessizce yutulan bir hatayı karakutuya kaydet.
+
+    Kullanım: except Exception as e: karakutu.sessiz_hata("kuyruk.duplicate", e)
+    Bot çökmez (hata yine yutulur) ama /karakutu'da iz kalır. Böylece
+    gelecekteki bug'lar saatlerce aranmaz, anında görülür.
+    """
+    try:
+        detay = f"[{modul}] {type(e).__name__}: {e}"
+        if baglam:
+            detay += f" | {baglam}"
+        kaydet("hata", detay[:200])
+    except Exception:
+        pass  # karakutu bile yazamıyorsa, en azından bot çökmesin

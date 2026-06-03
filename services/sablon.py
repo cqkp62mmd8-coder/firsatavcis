@@ -160,11 +160,17 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     magaza       = magaza_bul(metin, lnk)
     # Ürün adı: Gemini'nin temiz çıkardığı ad öncelikli
     # v23.0 — TEK MERKEZİ KAPI'dan geçir
-    from services.urun_kapisi import gecerli_urun_adi as _kapi
+    # v23.8 — Gemini kopuk parça verebilir, saf-Python ile KARŞILAŞTIR
+    from services.urun_kapisi import gecerli_urun_adi as _kapi, en_iyi_urun_adi as _eniyi0, guzellestir as _guzel0
     if gemini and gemini.get("urun_adi"):
-        urun = _kapi(gemini["urun_adi"], metin) or urun_adi_bul(metin)
+        _gb = _kapi(gemini["urun_adi"], metin)
+        _pb = _kapi(urun_adi_bul(metin), metin)
+        urun = _eniyi0(_gb, _pb, metin) or _pb or urun_adi_bul(metin)
     else:
         urun = urun_adi_bul(metin)
+    # v23.9 — Uzun teknik adı okunabilir hale getir
+    if urun:
+        urun = _guzel0(urun)
     eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
     tur          = indirim_turu(metin)
     kat, ikon, _ = kategori_bul(metin)
@@ -172,7 +178,14 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     # (#İşbirliği, Karşılaştır, fiyatlar, "Stokta var") kategoriyi şaşırtıyor.
     # Ürün adı varsa kategori SADECE ondan belirlensin (çok daha isabetli).
     from services.analiz import urun_adi_bul as _uab
-    _temiz_ad = (gemini or {}).get("urun_adi") or _uab(metin) or metin
+    # v23.8 — Gemini kopuk parça verebilir, saf-Python ile karşılaştır
+    try:
+        from services.urun_kapisi import en_iyi_urun_adi as _eniyi2
+        _g_ad = (gemini or {}).get("urun_adi")
+        _p_ad = _uab(metin)
+        _temiz_ad = _eniyi2(_g_ad, _p_ad, metin) or _p_ad or metin
+    except Exception:
+        _temiz_ad = (gemini or {}).get("urun_adi") or _uab(metin) or metin
     # Temiz ad ile kategoriyi yeniden belirle (gürültüsüz → isabetli)
     _kat2, _ikon2, _ = kategori_bul(_temiz_ad)
     if _kat2 != "genel":
@@ -336,6 +349,15 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
                     s.append("💎 <b>Son 30 günün en düşük fiyatı!</b>")
                 elif analiz["sahte_indirim_mi"]:
                     s.append("⚠️ <i>Fiyat geçmişi sabit — indirim oranını araştır</i>")
+                elif (analiz.get("gecmis_max") and analiz["kayit_sayisi"] >= 2
+                      and analiz["gecmis_max"] > yeni_v):
+                    # v23.9 — Geçmişe göre ne kadar ucuzladı? (güven veren bağlam)
+                    fark = analiz["gecmis_max"] - yeni_v
+                    yuzde = int(fark / analiz["gecmis_max"] * 100)
+                    if yuzde >= 5:
+                        _gm = analiz["gecmis_max"]
+                        eski_str = f"{_gm:,.0f}".replace(",", ".")
+                        s.append(f"📉 <i>Geçen ay {eski_str} TL'ydi (%{yuzde} ucuzladı)</i>")
                 # Stok geri-gelme
                 durum = fiyat_takip.stok_kontrol(kim)
                 if durum == "yeniden_stokta":
@@ -396,12 +418,21 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
         return None
     # Ürün adı: Gemini varsa onu kullan (boş slogan kontrolü için)
     # v23.0 — TEK MERKEZİ KAPI'dan geçir (Amazon vb çöp burada elenir)
-    from services.urun_kapisi import gecerli_urun_adi as _kapi2
+    # v23.8 — Gemini ile saf-Python KARŞILAŞTIR: Gemini bazen uzun ürün adının
+    # ortasından kopuk parça veriyor ("Apple iPad ... Gümüş Rengi" yerine
+    # "Gün Süren Pil Ömrü Gümüş Rengi Satıcı Amazon Depo"). Mesaj başıyla
+    # örtüşen ad doğrudur.
+    from services.urun_kapisi import gecerli_urun_adi as _kapi2, en_iyi_urun_adi as _eniyi, guzellestir as _guzel
     _g_urun = (gemini or {}).get("urun_adi")
     if _g_urun:
-        _urun = _kapi2(_g_urun, metin) or urun_adi_bul(metin)
+        _g_aday = _kapi2(_g_urun, metin)
+        _p_aday = _kapi2(urun_adi_bul(metin), metin)
+        _urun = _eniyi(_g_aday, _p_aday, metin) or _p_aday or urun_adi_bul(metin)
     else:
         _urun = urun_adi_bul(metin)
+    # v23.9 — Uzun teknik adı okunabilir hale getir
+    if _urun:
+        _urun = _guzel(_urun)
     _tur_on = indirim_turu(metin)
     # v22.6 — Marka kampanyası DESTEKLENİYOR (kullanıcı istedi) ama güvenli:
     #   • Ürün adı varsa → normal ürün paylaşımı
@@ -416,7 +447,13 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     lnk = link_bul(metin, bl)
     mag = magaza_bul(metin, lnk)
     # Hashtag/kategori için TEMİZ ürün adı kullan (gürültü kategoriyi şaşırtmasın)
-    _temiz = (gemini or {}).get("urun_adi") or urun_adi_bul(metin) or metin
+    # v23.8 — Gemini kopuk parça verebilir, saf-Python ile karşılaştır
+    try:
+        from services.urun_kapisi import en_iyi_urun_adi as _eniyi3
+        _temiz = _eniyi3((gemini or {}).get("urun_adi"), urun_adi_bul(metin), metin) \
+                 or urun_adi_bul(metin) or metin
+    except Exception:
+        _temiz = (gemini or {}).get("urun_adi") or urun_adi_bul(metin) or metin
     kat, _, kat_tags = kategori_bul(_temiz)
     if kat == "genel":
         kat, _, kat_tags = kategori_bul(metin)   # ad işe yaramazsa tam metne dön
