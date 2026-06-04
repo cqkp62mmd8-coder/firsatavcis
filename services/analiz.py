@@ -208,6 +208,21 @@ def fiyat_bul(metin: str) -> tuple[str | None, str | None, float, float]:
     if not metin:
         return None, None, 0, 0
 
+    # v23.17 — KUPON DEĞERİ TEMİZLİĞİ: "Sepette 100 TL indirim", "100 TL kupon"
+    # gibi ifadelerdeki sayı bir İNDİRİM MİKTARIDIR, ürün fiyatı DEĞİL.
+    # ÖNEMLİ: kalıplar satır-içi (\n GEÇMEZ) — yoksa fiyat satırı + sonraki
+    # "kupon" kelimesi birlikte silinip gerçek fiyat kayboluyordu.
+    _kupon_deger_kaliplari = [
+        r"sepette[ \t]+[\d.,]+[ \t]*TL",
+        r"(?:indirim|kupon|hediye)[ \t]*[:\-]?[ \t]*[\d.,]+[ \t]*TL",
+        r"[\d.,]+[ \t]*TL['\u2019]?[ \t]*(?:luk|lik|lık)?[ \t]*(?:indirim|kupon|hediye)",
+        r"[\d.,]+[ \t]*/[ \t]*[\d.,]+[ \t]*TL",   # "5000/500TL" indirim mekaniği
+    ]
+    temiz = metin
+    for kp in _kupon_deger_kaliplari:
+        temiz = re.sub(kp, " ", temiz, flags=re.I)
+    metin = temiz
+
     # 1. Etiketli format (İndirimli Fiyat / Normal Fiyat)
     ind = re.findall(r"(?:indirimli\s*fiyat|sale\s*price|⚡️?\s*[İi]ndirimli\s*[Ff]iyat)\s*[:\-]?\s*[₺$€]?\s*([\d.,]+)", metin, re.I)
     nor = re.findall(r"(?:normal\s*fiyat|liste\s*fiyat|piyasa[sı]*|💰\s*[Nn]ormal\s*[Ff]iyat)\s*[:\-]?\s*[₺$€]?\s*([\d.,]+)", metin, re.I)
@@ -1022,18 +1037,27 @@ def link_bul(metin: str, buton_linkleri: list[str] | None = None) -> str | None:
 
 
 def kupon_bul(metin: str) -> str | None:
+    # v23.17 — Kupon KODU en az bir HARF içermeli (HAZIRAN1000, INDIRIM50).
+    # "100TL", "500" gibi salt-rakam değerler kupon KODU değil, indirim
+    # MİKTARIDIR — bunları kod sanma (kanal hatasıydı).
     kaliplar = [
-        r"kupon\s*[:\-]?\s*([A-Z0-9]{4,20})",
-        r"indirim\s*kodu?\s*[:\-]?\s*([A-Z0-9]{4,20})",
-        r"([A-Z0-9]{4,20})\s*[Kk]odu?\s*(?:ile|İle|kullan)",
-        r"([A-Z0-9]{4,20})\s*[Kk]upon",
+        r"kupon\s*kodu?\s*[:\-]?\s*([A-Z][A-Z0-9]{3,19})",   # "Kupon kodu: INDIRIM50"
+        r"indirim\s*kodu?\s*[:\-]?\s*([A-Z][A-Z0-9]{3,19})",
+        r"kupon\s*[:\-]?\s*([A-Z][A-Z0-9]{3,19})",
+        r"([A-Z][A-Z0-9]{3,19})\s*[Kk]odu?\s*(?:ile|İle|kullan)",
+        r"([A-Z][A-Z0-9]{3,19})\s*[Kk]upon",
+        r"kodu?\s*[:\-]\s*([A-Z][A-Z0-9]{3,19})",   # "Kodu: KETTLE50"
     ]
     for kalip in kaliplar:
         eslesme = re.findall(kalip, metin or "", re.I)
         if eslesme:
             kod = eslesme[0].upper()
+            # En az bir harf İÇERMELİ (salt rakam = indirim değeri, kod değil)
+            if not any(c.isalpha() for c in kod):
+                continue
             # Yaygın yanlış eşleşmeleri filtrele
-            if kod not in {"ADET", "KODU", "INDIRIM", "KUPON", "FIYAT"}:
+            if kod not in {"ADET", "KODU", "INDIRIM", "KUPON", "FIYAT",
+                           "SEPETTE", "SEPET", "HEDIYE", "TL"}:
                 return kod
     return None
 
@@ -1146,7 +1170,11 @@ def indirim_yildiz(indirim: int) -> str:
 
 # 🔻 satır başı → kesin ürün ayırıcısı
 _YENI_URUN = re.compile(
-    r"^[🔻🔥📦🛍️⚡🎯💎🆕]\s*\S",   # ürün başlığı sayılan emoji'lerden biriyle başlıyor
+    # ürün başlığı sayılan işaretlerden biriyle başlıyor:
+    #  - ürün emojileri (🔻🔥📦...)
+    #  - v23.16: numaralı emojiler (1️⃣2️⃣...), ✅🔑 (kupon satırları),
+    #    madde işaretleri (•, ►, ▪, ‣) ve "1)" "2." gibi numaralı liste
+    r"^(?:[🔻🔥📦🛍️⚡🎯💎🆕✅🔑🔸🔹▪️◾•►‣]|[0-9]️⃣|[0-9]{1,2}[\).]\s)\s*\S",
     re.UNICODE,
 )
 

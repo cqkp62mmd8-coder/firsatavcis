@@ -55,6 +55,65 @@ def _kara_liste_eslesir(metin: str) -> bool:
     return False
 
 
+def _kupon_adaylar_olustur(kupon_urunler: list[dict], btn_links: list[str],
+                           ham: str) -> list[dict]:
+    """v23.15 — Kupon ayrıştırıcının çıktısını _blok_analiz formatında
+    aday dict'lerine çevir. Her kupon ürünü ayrı bir paylaşım adayı olur.
+
+    Fiyat zaten ayrıştırıcıdan kesin geliyor (kupon kodundan değil), o yüzden
+    fiyat çıkarıcıyı atlayıp doğrudan ürün+fiyat+kod kullanıyoruz.
+    """
+    from services.analiz import kategori_bul
+    from services.urun_kapisi import gecerli_urun_adi, guzellestir
+    adaylar = []
+    for u in kupon_urunler:
+        ad = gecerli_urun_adi(u.get("urun"), ham)
+        if not ad:
+            continue
+        ad = guzellestir(ad)
+        fiyat = u.get("fiyat")
+        eski = u.get("eski_fiyat")
+        # İndirim yüzdesi (eski varsa)
+        indirim = 0
+        if eski and fiyat and eski > fiyat:
+            indirim = int((eski - fiyat) / eski * 100)
+        kat, _, _ = kategori_bul(ad)
+        # Fiyatları TR formatında string'e çevir (23899.0 → "23.899")
+        def _fmt(v):
+            if not v:
+                return None
+            return f"{v:,.0f}".replace(",", ".")
+        fiyat_str = _fmt(fiyat)
+        eski_str = _fmt(eski)
+        # Sahte gemini sonucu (ürün adı + kategori + kupon)
+        sahte_gemini = {
+            "urun_adi": ad, "kategori": kat, "reklam": False,
+            "tanitim": "", "fiyat_uyari": "", "kalite": 3,
+            "fiyat": fiyat, "eski_fiyat": eski or 0,
+            "kupon_kodu": u.get("kod"),
+        }
+        blok_metin = f"{ad}\n{fiyat_str} TL"
+        if eski_str:
+            blok_metin += f" {eski_str} TL"
+        if u.get("kod"):
+            blok_metin += f"\n🎟️ Kupon: {u['kod']}"
+        adaylar.append({
+            "blok": blok_metin,
+            "indirim": indirim,
+            "link": btn_links[0] if btn_links else "",
+            "magaza": "E-Ticaret",
+            "kat": kat,
+            "skor": 50,
+            "fs": 5,
+            "gemini": sahte_gemini,
+            "urun": ad,
+            "kupon_kodu": u.get("kod"),
+            "_kupon_fiyat": fiyat,
+            "_kupon_eski": eski,
+        })
+    return adaylar
+
+
 def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = None,
                  orijinal_mesaj: str = "") -> dict | None:
     """Bir bloğu analiz edip dict döner; geçersizse None.
@@ -416,13 +475,29 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                     gorsel_bytes = None
             kanal_adi = getattr(getattr(event, "chat", None), "username", None) or "bilinmiyor"
 
-            bloklar = mesaj_bolum_ayir(ham)
-
-            # Her bloğu analiz et. Bloklara linkleri akıllıca dağıt:
-            #  - Blok sayısı ile ürün linki sayısı eşitse → her blok kendi linkini alır
-            #    (yoksa link_bul hepsine aynı ilk linki verir → çoklu paylaşım bozulur)
-            #  - Aksi halde → tüm linkler havuzdan
+            # v23.15 — KUPON MESAJI ÖZEL İŞLEME: "Kodu İle X TL" formatındaki
+            # çok-ürünlü kupon mesajlarını ayrı çöz (fiyat çıkarıcı bunlarda
+            # şaşırıyordu: "500"u HAZIRAN500 kodundan fiyat sanıyordu).
             adaylar = []
+            try:
+                from services import kupon_ayristirici
+                if kupon_ayristirici.kupon_mesaji_mi(ham):
+                    kupon_urunler = kupon_ayristirici.ayristir(ham)
+                    if kupon_urunler:
+                        adaylar = _kupon_adaylar_olustur(kupon_urunler, btn_links, ham)
+                        log("KUPON", f"{len(adaylar)} kupon ürünü ayrıştırıldı")
+            except Exception as _e:
+                try:
+                    from utils import karakutu
+                    karakutu.sessiz_hata("mesaj.kupon_ayristir", _e)
+                except Exception:
+                    pass
+
+            # Kupon ayrıştırma sonuç vermediyse → normal blok işleme
+            if adaylar:
+                bloklar = []  # kupon yolu kullanıldı, normal işlemeyi atla
+            else:
+                bloklar = mesaj_bolum_ayir(ham)
             # Akıllı eşleştirme: blok sayısı ile ürün linki sayısı eşitse birebir,
             # DEĞİLSE ama yeterli ürün linki varsa yine sıralı eşle (fazla/alakasız
             # buton link sayısını bozsa bile her bloğa kendi linkini ver).

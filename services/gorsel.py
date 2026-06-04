@@ -157,35 +157,8 @@ def logo_ekle(gorsel_bytes: bytes, link: str | None = None,
                 qy = h - kart_h - 12
                 urun.paste(kart, (qx, qy), kart)
 
-        # ─ 4. İndirim rozeti (sağ-üst) — v23.9 ───────────────
-        # Görsel önce görünür; çarpıcı %X rozeti dikkat çeker.
-        if indirim and indirim >= 20:
-            try:
-                from PIL import ImageDraw, ImageFont
-                cap = max(70, min(150, int(w * 0.16)))   # rozet çapı
-                marj = max(10, int(w * 0.02))
-                # Kırmızı daire
-                rozet = Image.new("RGBA", (cap, cap), (0, 0, 0, 0))
-                rd = ImageDraw.Draw(rozet)
-                rd.ellipse([0, 0, cap - 1, cap - 1], fill=(220, 38, 38, 235))
-                rd.ellipse([0, 0, cap - 1, cap - 1], outline=(255, 255, 255, 255),
-                           width=max(2, cap // 30))
-                # Yazı: %X
-                yazi = f"%{indirim}"
-                try:
-                    fnt = ImageFont.truetype(
-                        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                        size=max(20, cap // 3))
-                except Exception:
-                    fnt = ImageFont.load_default()
-                bb = rd.textbbox((0, 0), yazi, font=fnt)
-                tw, th = bb[2] - bb[0], bb[3] - bb[1]
-                rd.text(((cap - tw) / 2 - bb[0], (cap - th) / 2 - bb[1]),
-                        yazi, font=fnt, fill=(255, 255, 255, 255))
-                # Sağ-üst köşeye yapıştır
-                urun.paste(rozet, (w - cap - marj, marj), rozet)
-            except Exception as e:
-                log("UYARI", f"İndirim rozeti hatası: {e}")
+        # ─ 4. İndirim rozeti — v23.17'de KALDIRILDI (kullanıcı gereksiz buldu) ─
+        # Eskiden sağ-üst köşeye "%X" rozeti basılıyordu (v23.9). Artık yok.
 
         cikti = BytesIO()
         urun.save(cikti, format="PNG", optimize=True)

@@ -1591,6 +1591,8 @@ class TestV239KaliteYukseltme:
         assert "Garantili" not in k and "Samsung Galaxy" in k
 
     def test_gorsel_indirim_rozeti(self):
+        """v23.17 — İndirim rozeti KALDIRILDI. logo_ekle indirim parametresi
+        alsa bile artık sağ-üste rozet basMAmalı (kullanıcı gereksiz buldu)."""
         from services.gorsel import logo_ekle
         from PIL import Image
         from io import BytesIO
@@ -1599,22 +1601,21 @@ class TestV239KaliteYukseltme:
         sonuc = logo_ekle(buf.getvalue(), link=None, indirim=50)
         out = Image.open(BytesIO(sonuc)).convert("RGB")
         w, h = out.size
-        # Sağ-üstte kırmızı rozet pikseli olmalı
+        # Sağ-üstte kırmızı rozet OLMAMALI (kaldırıldı)
         kirmizi = any(
             out.getpixel((x, y))[0] > 180 and out.getpixel((x, y))[1] < 80
             for x in range(int(w*0.8), w-10) for y in range(10, int(h*0.2))
         )
-        assert kirmizi, "İndirim rozeti basılmadı"
+        assert not kirmizi, "İndirim rozeti hâlâ basılıyor (kaldırılmalıydı)"
 
-    def test_dusuk_indirimde_rozet_yok(self):
-        """İndirim < 20 ise rozet basılmamalı (görsel kalabalıklaşmasın)."""
+    def test_indirim_param_hata_vermez(self):
+        """indirim parametresi geçilse de logo_ekle çökmemeli (geriye uyumluluk)."""
         from services.gorsel import logo_ekle
         from PIL import Image
         from io import BytesIO
         img = Image.new("RGB", (600, 600), (70, 130, 180))
         buf = BytesIO(); img.save(buf, "PNG")
-        # indirim=10 → rozet yok, hata da vermemeli
-        sonuc = logo_ekle(buf.getvalue(), link=None, indirim=10)
+        sonuc = logo_ekle(buf.getvalue(), link=None, indirim=50)
         assert sonuc and len(sonuc) > 0
 
 
@@ -1746,3 +1747,157 @@ class TestV2314KarakutuFormatla:
         # Boş karakutuda da çökmemeli
         m = karakutu.formatla(15)
         assert isinstance(m, str)
+
+
+class TestV2315KuponAyristirici:
+    """v23.15 — Çok-ürünlü kupon mesajları ("Kodu İle X TL"). Fiyat çıkarıcı
+    "500"ü HAZIRAN500 kodundan fiyat sanıyordu → artık doğru ayrıştırılıyor."""
+
+    def test_kupon_mesaji_tespit(self):
+        from services.kupon_ayristirici import kupon_mesaji_mi
+        m = "Philips\n✅HAZIRAN1000 Kodu İle 23.899TL'ye Düşüyor"
+        assert kupon_mesaji_mi(m)
+        assert not kupon_mesaji_mi("Normal ürün 500 TL")
+
+    def test_iki_urun_ayrisir(self):
+        from services.kupon_ayristirici import ayristir
+        m = """🔥Philips Espresso Makinesi
+✅HAZIRAN1000 Kodu İle 23.899TL'ye Düşüyor - Piyasası 24.999TL
+🔻Salomon Ayakkabı HAZIRAN500 Kodu İle 6.492TL"""
+        urunler = ayristir(m)
+        assert len(urunler) == 2, f"2 ürün bekleniyordu: {len(urunler)}"
+        assert urunler[0]["fiyat"] == 23899.0, f"Philips fiyatı yanlış: {urunler[0]['fiyat']}"
+        assert urunler[0]["eski_fiyat"] == 24999.0
+        assert urunler[0]["kod"] == "HAZIRAN1000"
+        assert urunler[1]["fiyat"] == 6492.0
+
+    def test_kupon_aciklamasi_fiyat_degil(self):
+        """'10000/1000TL İndirim' kupon mekaniği, fiyat sanılmamalı."""
+        from services.kupon_ayristirici import ayristir
+        m = """🔥Ürün Adı Burada
+✅KOD1000 Kodu İle 5.000TL'ye Düşüyor
+🚨KOD1000 Mobil Uygulamada 10000/1000TL İndirim Yapıyor"""
+        urunler = ayristir(m)
+        assert len(urunler) >= 1
+        # Fiyat 5000 olmalı, 1000 veya 10000 değil
+        assert urunler[0]["fiyat"] == 5000.0, f"Kupon açıklaması fiyat sanıldı: {urunler[0]['fiyat']}"
+
+    def test_kupon_sablon_dogru_fiyat(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kupon_sb"
+        os.makedirs("/tmp/test_kupon_sb", exist_ok=True)
+        from handlers.mesaj import _kupon_adaylar_olustur
+        from services.kupon_ayristirici import ayristir
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        m = """🔥Philips Espresso Makinesi
+✅HAZIRAN1000 Kodu İle 23.899TL'ye Düşüyor - Piyasası 24.999TL"""
+        adaylar = _kupon_adaylar_olustur(ayristir(m), ["https://hepsiburada.com/x"], m)
+        assert len(adaylar) >= 1
+        s = olustur(adaylar[0]["blok"], adaylar[0]["indirim"],
+                    [adaylar[0]["link"]], gemini=adaylar[0]["gemini"])
+        assert s and "23.899" in s, "Şablonda doğru fiyat yok"
+        assert "HAZIRAN1000" in s, "Kupon kodu görünmüyor"
+
+
+class TestV2316MesajAnlama:
+    """v23.16 — Mesaj anlama iyileştirmeleri:
+    1. Ürün adı kısaltma yazım hataları (kelime atma → güvenli budama)
+    2. İndirim oranı tutarsızlığı (iki fiyat varsa otomatik hesapla)
+    3. Çoklu ürün bölme (numaralı emoji, madde işareti)"""
+
+    def test_kisaltma_kelime_bozmaz(self):
+        """Güvenli kısaltma: hiçbir kelime ortadan atılmaz/bozulmaz."""
+        from services.urun_kapisi import guzellestir
+        for ad in ["Philips 5000 Serisi Lattego Tam Otomatik Espresso Makinesi",
+                   "WORX WX803 20Volt Li-ion 125mm Avuç Taşlama",
+                   "Karaca Hatır 6 Kişilik Çay Makinesi Seti"]:
+            g = guzellestir(ad)
+            # Sonuçtaki her kelime (… hariç) orijinalde olmalı
+            for k in g.replace("…", "").split():
+                assert k in ad, f"Kısaltma kelime bozdu: '{k}' / {ad}"
+
+    def test_kisaltma_parantez_atar(self):
+        from services.urun_kapisi import guzellestir
+        g = guzellestir("Samsung Galaxy S24 256 GB (Türkiye Garantili)")
+        assert "Garantili" not in g and "Samsung" in g
+
+    def test_indirim_orani_otomatik(self):
+        """İki fiyat varsa indirim oranı metinde yazmasa bile hesaplanmalı."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_ind"
+        os.makedirs("/tmp/test_ind", exist_ok=True)
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Metinde "%" yok ama iki fiyat var → %48 hesaplanmalı
+        s = olustur("📦 Bosch Matkap\n2.499 TL yerine 1.299 TL", 0, ["https://x.com/p"],
+                    gemini={"urun_adi": "Bosch Matkap", "kategori": "diy", "reklam": False,
+                            "tanitim": "", "fiyat_uyari": "", "kalite": 4, "fiyat": 0, "eski_fiyat": 0})
+        assert s and "%48" in s, "İndirim oranı hesaplanmadı"
+
+    def test_tek_fiyat_firsat(self):
+        """Tek fiyat varsa indirim uydurMAmalı (FIRSAT ÜRÜNÜ)."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_ind2"
+        os.makedirs("/tmp/test_ind2", exist_ok=True)
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        s = olustur("📦 Bosch Matkap\n💰 1.299 TL", 0, ["https://x.com/p"],
+                    gemini={"urun_adi": "Bosch Matkap", "kategori": "diy", "reklam": False,
+                            "tanitim": "", "fiyat_uyari": "", "kalite": 4, "fiyat": 0, "eski_fiyat": 0})
+        assert s and "FIRSAT" in s and "%" not in s.split("\n")[0]
+
+    def test_numarali_liste_bolunur(self):
+        from services.analiz import mesaj_bolum_ayir
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        m = "1️⃣ Bosch Matkap 500 TL\n2️⃣ Makita Vidalama 600 TL\n3️⃣ Dewalt Testere 700 TL"
+        assert len(mesaj_bolum_ayir(m)) >= 3, "Numaralı liste bölünmedi"
+
+    def test_tek_urun_bolunmez(self):
+        """Çok satırlı TEK ürün yanlışlıkla bölünmemeli."""
+        from services.analiz import mesaj_bolum_ayir
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        m = "📦 Apple iPad 11 inç 128GB Gümüş Wi-Fi\n💰 12.084 TL\n📦 Stok: 7 adet\n🏪 Amazon"
+        assert len(mesaj_bolum_ayir(m)) == 1, "Tek ürün yanlış bölündü"
+
+
+class TestV2317KuponDeger:
+    """v23.17 — Kupon DEĞERİ ('100 TL indirim') fiyat/kod sanılıyordu.
+    Üç bug: (1) değer fiyat sanılıyor, (2) değer kod sanılıyor, (3) gerçek kod kaçıyor."""
+
+    def test_kupon_degeri_fiyat_sanilmaz(self):
+        from services.analiz import fiyat_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        _, ys, _, _ = fiyat_bul("📦 Philips Tıraş\n💰 1.299 TL\n🎟️ Sepette 100 TL indirim kuponu")
+        assert ys == "1.299", f"Kupon değeri fiyat sanıldı: {ys}"
+
+    def test_sepette_x_tl_fiyat_degil(self):
+        from services.analiz import fiyat_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        _, ys, _, _ = fiyat_bul("📦 Tefal Tava\n599 TL\nSepette 150 TL kupon var")
+        assert ys == "599", f"Sepette değeri fiyat sanıldı: {ys}"
+
+    def test_deger_kupon_kodu_sanilmaz(self):
+        from services.analiz import kupon_bul
+        # "100TL" bir indirim değeri, kupon KODU değil (salt rakam+TL)
+        assert kupon_bul("📦 Bosch\n💰 899 TL\nKupon: 100TL") is None
+
+    def test_gercek_kod_yakalanir(self):
+        from services.analiz import kupon_bul
+        assert kupon_bul("📦 Apple\n💰 2.999 TL\nKupon kodu: INDIRIM50") == "INDIRIM50"
+        assert kupon_bul("📦 Ütü\nKETTLE50 kodu ile 100 TL indirim") == "KETTLE50"
+
+    def test_normal_fiyat_bozulmaz(self):
+        """Kupon temizliği normal iki-fiyatı bozmamalı."""
+        from services.analiz import fiyat_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        _, ys, ev, yv = fiyat_bul("📦 Matkap\n2.499 TL yerine 1.299 TL")
+        assert ys == "1.299" and ev == 2499.0

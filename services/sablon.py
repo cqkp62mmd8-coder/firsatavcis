@@ -172,6 +172,11 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
     if urun:
         urun = _guzel0(urun)
     eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
+    # v23.16 — TUTARLILIK: İki fiyat belliyse indirim oranını OTOMATİK hesapla.
+    if (not indirim or indirim <= 0) and eski_v and yeni_v and eski_v > yeni_v > 0:
+        _hes = int(round((eski_v - yeni_v) / eski_v * 100))
+        if _hes >= 1:
+            indirim = _hes
     tur          = indirim_turu(metin)
     kat, ikon, _ = kategori_bul(metin)
     # Kategori tahmini için TEMİZ ürün adını kullan — tam metindeki gürültü

@@ -317,66 +317,46 @@ _KESME_NOKTASI = {
 }
 
 
-def guzellestir(ad: str | None, max_kelime: int = 7) -> str | None:
-    """Uzun ürün adını okunabilir hale getir. Marka+model+kritik özellik tut.
+def guzellestir(ad: str | None, max_kelime: int = 9) -> str | None:
+    """Ürün adını GÜVENLİ şekilde sadeleştir.
 
-    Strateji:
-     1. İki nokta (:) varsa → öncesi genelde ana ürün adı, onu tut
-     2. Çok uzunsa → ilk max_kelime kelimeyi tut, teknik gürültüyü ele
-     3. Parantez içi (garanti notu vb.) → at
+    v23.16 — ÖNEMLİ DEĞİŞİKLİK: Artık kelimeleri YENİDEN SEÇMİYOR/SIRALAMIYOR.
+    Eski sürüm "Philips...Espresso Makinesi" → "...Espresso" gibi ürünün
+    türünü (Makinesi, Taşlama) kesip yazım hataları yapıyordu.
+
+    Yeni strateji — sadece GÜVENLİ işlemler, hiçbir kelimeyi ortadan atmaz:
+     1. Parantez içini at: "(Samsung Türkiye Garantili)" → çıkar
+     2. Belirgin teknik kuyruğu kes (virgülden sonra "Wi-Fi 6, 12 MP..." gibi)
+     3. Hâlâ çok uzunsa kelime sınırında kes (ortadan kelime ATMAZ, sona "…" koyar)
+
+    Sonuç her zaman baştan başlar, kelimeler bozulmaz, sıra korunur.
     """
     if not ad or not isinstance(ad, str):
         return ad
     ad = ad.strip()
 
-    # Parantez içini at: "(Samsung Türkiye Garantili)" gibi
-    ad = re.sub(r"\s*\([^)]*\)\s*", " ", ad).strip()
+    # 1. Parantez içini at (garanti notu vb.)
+    ad = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*", " ", ad).strip()
     ad = re.sub(r"\s+", " ", ad)
 
-    kelimeler = ad.split()
-    if len(kelimeler) <= max_kelime:
-        return ad  # zaten kısa
+    # 2. Belirgin teknik kuyruğu kes: ilk virgülden sonrası genelde teknik
+    #    detaydır AMA sadece virgülden ÖNCEki kısım yeterince uzunsa (ürün
+    #    adı + en az bir özellik içeriyorsa). Aksi halde dokunma.
+    if "," in ad:
+        on = ad.split(",")[0].strip()
+        if len(on.split()) >= 3:   # virgül öncesi makul bir ürün adı
+            ad = on
 
-    # İki nokta varsa: "Apple A16 çipli iPad: 11 inç..." → ana kısım + 1-2 özellik
+    # 3. İki nokta sonrası teknik detayı da kes (aynı güvenli mantık)
     if ":" in ad:
-        ana, _, detay = ad.partition(":")
-        ana = ana.strip()
-        ana_kelime = ana.split()
-        if 2 <= len(ana_kelime) <= max_kelime:
-            # Ana kısım makul → ona detaydan ilk anlamlı özelliği ekle
-            detay_kelime = detay.strip().split()
-            # İlk teknik-olmayan 2 kelimeyi ekle (örn "11 inç" veya "128 GB")
-            eklenecek = []
-            for k in detay_kelime[:5]:
-                k_low = k.replace("İ","i").replace("I","ı").lower().strip(",.")
-                if k_low in _GURULTU_KELIME:
-                    break
-                eklenecek.append(k)
-                # Birim kelimesi (GB/TB/inç) sayıdan sonra gelir → onu da al, sonra dur
-                if len(eklenecek) >= 3:
-                    # Sonraki kelime birim mi? (GB, TB, inç, ml, L)
-                    break
-            # Son kelime sayıysa ve sonrası birimse, birimi de ekle
-            if eklenecek and re.match(r"^\d+$", eklenecek[-1].strip(",.")):
-                idx = len(eklenecek)
-                if idx < len(detay_kelime):
-                    sonraki = detay_kelime[idx].strip(",.")
-                    if sonraki.replace("İ","i").replace("I","ı").lower() in {
-                        "gb", "tb", "mb", "inç", "inc", "ml", "l", "cm", "mm", "w", "kg"}:
-                        eklenecek.append(detay_kelime[idx])
-            sonuc = ana
-            if eklenecek:
-                sonuc = ana + " " + " ".join(eklenecek)
-            return sonuc.strip(" ,-")
+        on = ad.split(":")[0].strip()
+        if len(on.split()) >= 2:
+            ad = on
 
-    # İki nokta yok → ilk max_kelime kelimeyi al, kesme noktasında dur
-    secilen = []
-    for k in kelimeler:
-        k_low = k.replace("İ","i").replace("I","ı").lower().strip(",.")
-        if k_low in _KESME_NOKTASI and len(secilen) >= 3:
-            break  # teknik detay başladı, kes
-        secilen.append(k)
-        if len(secilen) >= max_kelime:
-            break
-    sonuc = " ".join(secilen).strip(" ,-")
-    return sonuc if len(sonuc) >= 3 else ad
+    # 4. Hâlâ çok uzunsa: kelime sınırında kes, sona "…" koy.
+    #    Kelime ORTADAN atılmaz — sadece sondan budanır, okunabilir kalır.
+    kelimeler = ad.split()
+    if len(kelimeler) > max_kelime:
+        ad = " ".join(kelimeler[:max_kelime]) + "…"
+
+    return ad.strip(" ,-") if len(ad.strip(" ,-")) >= 3 else None
