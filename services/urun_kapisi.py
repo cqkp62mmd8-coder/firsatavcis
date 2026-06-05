@@ -43,7 +43,7 @@ _JENERIK = {
     "indirim", "indirimli", "fiyat", "fiyatı", "normal", "kampanya",
     "fırsat", "fırsatı", "tl", "lira", "ucuz", "ücretsiz", "kargo",
     "sepette", "sepet", "kupon", "kod", "şimdi", "hemen", "son", "adet",
-    "var", "yok", "stokta", "stok", "ek", "varan", "kadar", "özel",
+    "var", "yok", "stokta", "stok", "stoklar", "stoklarla", "ek", "varan", "kadar", "özel",
     "tüm", "tum", "seçili", "secili", "çeşitli", "binlerce",
     # Kategori adları (tek başına ürün değil)
     "elektronik", "giyim", "ev", "kozmetik", "spor", "kitap", "oyuncak",
@@ -56,6 +56,11 @@ _JENERIK = {
     "süper", "super", "harika", "muhteşem", "muhtesem", "inanılmaz",
     "inanilmaz", "efsane", "kaçırılmayacak", "kacirilmayacak", "müthiş",
     "muthis", "şahane", "sahane", "bomba", "dev", "mega",
+    # v23.27 — Duyuru/kampanya fiilleri ve çağrıları (ürün adı DEĞİL)
+    "başladı", "basladi", "geldi", "kaçırma", "kacirma", "kaçmaz", "kacmaz",
+    "eriyor", "tükeniyor", "tukeniyor", "bitiyor", "acele", "fırsatı",
+    "firsati", "firsat", "duyuru", "müjde", "mujde", "indi", "düştü",
+    "dustu", "yakala", "başvur", "basvur", "kazan", "katıl", "katil",
 }
 
 # Ürün-benzeri jenerik kelimeler — tek başına yetmez ama varsa zayıf sinyal

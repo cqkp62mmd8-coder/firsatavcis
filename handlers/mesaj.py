@@ -404,6 +404,54 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
     }
 
 
+def _coklu_link_satir_ayir(blok: str, linkler: list, orijinal_mesaj: str) -> list | None:
+    """v23.27 — Tek blokta N farklı ürün linki varken bloğu satır-bazlı ayır.
+
+    Her anlamlı satırı bağımsız analiz eder. SADECE geçerli ürün sayısı link
+    sayısına TAM eşitse sonuç döndürür (her ürün → kendi linki, sırayla).
+    Aksi halde None → çağıran güvenli davranışı (yalnız ilk ürün) korur.
+
+    Bu sıkı koşul yanlış isimli/yanlış linkli gönderi üretmeyi önler.
+    """
+    if not blok or not linkler or len(linkler) < 2:
+        return None
+    satirlar = [s.strip() for s in blok.split("\n") if s.strip()]
+    if len(satirlar) < 2:
+        return None
+
+    # Önce hangi satırların geçerli ürün adı + fiyat içerdiğini bul (linksiz tarama).
+    # _blok_analiz link olmadan satırı düşürdüğü için, ÖN ELEME ayrı yapılır:
+    # gecerli ürün adı + fiyat olan satırları topla.
+    from services.urun_kapisi import gecerli_urun_adi
+    from services.analiz import fiyat_bul
+    gecerli_satirlar = []
+    for s in satirlar:
+        ad = gecerli_urun_adi(s, s)
+        _, ys, _, _ = fiyat_bul(s)
+        if ad and ys:
+            gecerli_satirlar.append(s)
+
+    # Güvenlik: ürün satırı sayısı link sayısıyla TAM eşleşmeli
+    if len(gecerli_satirlar) != len(linkler):
+        return None
+
+    # Her satırı KENDİ linkiyle analiz et (link olmadan _blok_analiz düşürür)
+    aday_satirlar = []
+    for s, lnk in zip(gecerli_satirlar, linkler):
+        try:
+            a = _blok_analiz(s, [lnk], gemini_sonuc=None, orijinal_mesaj=orijinal_mesaj)
+        except Exception:
+            a = None
+        if a and a.get("urun"):
+            a["link"] = lnk
+            aday_satirlar.append(a)
+
+    # Hepsi geçerli ürün üretmeli; biri bile düşerse güvenli davran
+    if len(aday_satirlar) != len(linkler):
+        return None
+    return aday_satirlar
+
+
 def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
     @client.on(events.NewMessage(chats=config.KAYNAK_KANALLAR))
     async def _dinle(event):
@@ -591,11 +639,22 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                     if k and k not in kimlikler:
                         kimlikler[k] = ul
                 if len(kimlikler) >= 2:
-                    # Gerçekten farklı ürünler ama tek blok → isim ayrılamaz.
-                    # Güvenli: sadece ilk ürünü paylaş (yanlış isimli 2. üretme).
-                    adaylar[0]["link"] = list(kimlikler.values())[0]
-                    log("BILGI", f"Tek blok + {len(kimlikler)} farklı ürün linki → "
-                                  "isim ayrımı yapılamadığı için sadece ilki paylaşılıyor")
+                    # v23.27 — Tek blok + N farklı ürün linki. ÖNCE bloğu
+                    # satır-bazlı ayırmayı dene: her satır geçerli ürün adı +
+                    # fiyat içeriyorsa VE adet link sayısıyla EŞLEŞİYORSA, her
+                    # ürünü kendi linkiyle ayrı paylaş. Eşleşme net değilse
+                    # güvenli davran (yanlış isimli gönderi üretme) → sadece ilk.
+                    coklu = _coklu_link_satir_ayir(
+                        adaylar[0]["blok"], list(kimlikler.values()), ham)
+                    if coklu and len(coklu) >= 2:
+                        adaylar = coklu
+                        log("BILGI", f"Tek blok + {len(kimlikler)} ürün linki → "
+                                      f"{len(coklu)} ürün satır-bazlı ayrıldı, hepsi paylaşılıyor")
+                    else:
+                        # Güvenli: sadece ilk ürünü paylaş (yanlış isim üretme)
+                        adaylar[0]["link"] = list(kimlikler.values())[0]
+                        log("BILGI", f"Tek blok + {len(kimlikler)} farklı ürün linki → "
+                                      "isim ayrımı yapılamadığı için sadece ilki paylaşılıyor")
                 else:
                     adaylar[0]["link"] = urun_linkleri[0]
 

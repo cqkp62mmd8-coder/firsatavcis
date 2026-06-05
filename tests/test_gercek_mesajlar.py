@@ -2296,3 +2296,61 @@ class TestV2326KuponSepetFiyati:
         # eski fiyat 1000 olmalı (100 kupon değeri DEĞİL)
         assert urunler[0]["eski_fiyat"] in (1000.0, None)
         assert urunler[0]["eski_fiyat"] != 100.0
+
+
+class TestV2327SloganVeCokluLink:
+    """v23.27 — #1 slogan/duyuru başlığı eleme, #3 tek blokta çoklu link ayırma."""
+
+    def test_slogan_eleniyor(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for s in ["YENİ KAMPANYA BAŞLADI!🔥", "🔥KAMPANYA FIRSATI!🔥",
+                  "Stoklar Eriyor Kaçırma", "Müjde Geldi", "Hemen Yakala"]:
+            assert gecerli_urun_adi(s, s) is None, f"Slogan elenmedi: {s}"
+
+    def test_gercek_urun_korunur(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for s in ["Bosch GSR 12V Matkap", "Stanley Klasik Vakumlu Termos",
+                  "Philips Yeni Seri Espresso Makinesi", "Logitech M171 Kablosuz Mouse"]:
+            assert gecerli_urun_adi(s, s), f"Gerçek ürün elendi: {s}"
+
+    def test_coklu_link_satir_ayrilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_cl"
+        os.makedirs("/tmp/test_cl", exist_ok=True)
+        from utils import db; db.init()
+        from handlers.mesaj import _coklu_link_satir_ayir
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        blok = ("Bosch GSR 12V Matkap 1.299 TL\n"
+                "Logitech M171 Mouse 299 TL\n"
+                "HyperX Cloud Kulaklık 1.599 TL")
+        linkler = ["https://sl.n11.com/a", "https://sl.n11.com/b", "https://sl.n11.com/c"]
+        sonuc = _coklu_link_satir_ayir(blok, linkler, blok)
+        assert sonuc and len(sonuc) == 3
+        # Her ürün kendi linkiyle eşleşmeli (sıralı)
+        assert sonuc[0]["link"].endswith("/a") and sonuc[2]["link"].endswith("/c")
+
+    def test_coklu_link_eslesmezse_guvenli(self):
+        """Ürün sayısı link sayısından farklıysa None (güvenli)."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_cl2"
+        os.makedirs("/tmp/test_cl2", exist_ok=True)
+        from utils import db; db.init()
+        from handlers.mesaj import _coklu_link_satir_ayir
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # 2 ürün, 3 link → eşleşmiyor → None
+        sonuc = _coklu_link_satir_ayir(
+            "Bosch Matkap 1.299 TL\nLogitech Mouse 299 TL",
+            ["https://a", "https://b", "https://c"], "x")
+        assert sonuc is None
+
+    def test_coklu_link_slogan_None(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_cl3"
+        os.makedirs("/tmp/test_cl3", exist_ok=True)
+        from utils import db; db.init()
+        from handlers.mesaj import _coklu_link_satir_ayir
+        sonuc = _coklu_link_satir_ayir("🔥 SÜPER FIRSATLAR 🔥\nKaçırma!",
+                                       ["https://a", "https://b"], "x")
+        assert sonuc is None

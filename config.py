@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.26-2026.06.01"   # Kupon sepet fiyati: 'X TL - Y TL Kupon Ile Sepette Z' formati artik sepet fiyatini (gercek odenen) gosteriyor + ikinci urun kacmiyor
+SURUM = "v23.27-2026.06.01"   # Slogan/duyuru basligi urun adi olmaktan eleniyor (YENI KAMPANYA BASLADI) + tek blokta coklu urun linki satir-bazli ayrilip hepsi paylasiliyor (guvenli kosullu)
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
