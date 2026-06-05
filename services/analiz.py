@@ -510,17 +510,21 @@ def urun_adi_bul(metin: str) -> str | None:
     try:
         ilk_satir = _ilk_satir_urun_adi(metin)
         if ilk_satir:
-            # İlk satır sonuçtan FARKLI ve sonuç ilk satırın ortasından bir
-            # parçaysa (ilk satır sonucu içeriyor ama sonuç baştan başlamıyor)
-            # → ilk satırı kullan
             if not sonuc:
                 sonuc = ilk_satir
             elif sonuc != ilk_satir:
                 _il = ilk_satir.replace("İ","i").replace("I","ı").lower()
                 _so = sonuc.replace("İ","i").replace("I","ı").lower()
-                # Sonuç ilk satırın BAŞIYLA örtüşmüyorsa → ML/yapısal ortadan
-                # kopuk parça almış → güvenilir ilk satırı kullan.
-                if not _il.startswith(_so[:12]):
+                # v23.20 — İlk satır temizken ham'ı reddet eğer ham:
+                #  (a) ilk satırın başıyla örtüşmüyor (kopuk parça), VEYA
+                #  (b) fiyat/satış kelimeleri içeriyor (fiyat satırına taşmış),
+                #      örn "...ye Düştü Piyasası", "...TL'ye", VEYA
+                #  (c) ilk satırdan belirgin uzun (kelime sayısı +3) → taşma
+                _fiyat_kelime = ("düştü", "dustu", "piyasası", "piyasasi",
+                                 "indirimli", "normal fiyat", " tl", "'ye", "ye düştü")
+                _tasma = len(_so.split()) > len(_il.split()) + 2
+                _fiyat_bulasmis = any(fk in _so for fk in _fiyat_kelime)
+                if (not _il.startswith(_so[:12])) or _fiyat_bulasmis or _tasma:
                     sonuc = ilk_satir
     except Exception:
         pass

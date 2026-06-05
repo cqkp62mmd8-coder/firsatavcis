@@ -104,32 +104,7 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
             await event.reply(_YARDIM, parse_mode="html")
 
         elif komut == "/durum":
-            ist = ist_yukle()
-            bugun = simdi_tr().strftime("%Y-%m-%d")
-            ikon = "⏸" if state.durduruldu else "✅"
-            durum = "Duraklatıldı" if state.durduruldu else "Aktif"
-            # Yapay zeka durumu
-            ai_satir = ""
-            try:
-                from utils import gemini
-                g = gemini.istatistik()
-                if g["aktif"]:
-                    if g.get("dinlenmede"):
-                        ai_satir = "\n🤖 Yapay Zeka: 🟡 yedekte (kota/hata)"
-                    else:
-                        ai_satir = f"\n🤖 Yapay Zeka: 🟢 Gemini aktif ({g['basari']} analiz)"
-                else:
-                    ai_satir = "\n🤖 Yapay Zeka: ⚪ saf-Python (Gemini anahtarı yok)"
-            except Exception:
-                pass
-            await event.reply(
-                f"{ikon} <b>Bot Durumu: {durum}</b>\n\n"
-                f"📅 Bugün: {ist.get('gunluk', {}).get(bugun, 0)} fırsat\n"
-                f"📈 Toplam: {ist.get('toplam', 0)} fırsat\n"
-                f"📬 Kuyruk: {kuyruk.qsize()} / {kuyruk.maxsize} mesaj"
-                f"{ai_satir}",
-                parse_mode="html",
-            )
+            await _zengin_panel(event, kuyruk)
 
         elif komut == "/istatistik":
             ist = ist_yukle()
@@ -258,6 +233,12 @@ async def _komut_isle(event, kuyruk: asyncio.Queue) -> None:
 
         elif komut == "/karakutu":
             await _karakutu_panosu(event)
+        elif komut == "/tiklamalar":
+            await _tiklama_panosu(event)
+        elif komut == "/rapor":
+            await _rapor_panosu(event)
+        elif komut == "/log":
+            await _log_gonder(event)
 
         elif komut == "/sozluk":
             await _sozluk_panosu(event)
@@ -1398,6 +1379,175 @@ async def _karne_panosu(event) -> None:
         await event.reply(f"⚠️ Karne alınamadı: {e}", parse_mode="html")
 
 
+async def _zengin_panel(event, kuyruk) -> None:
+    """v23.21 — Kapsamlı durum paneli: çok daha fazla istatistik."""
+    try:
+        ist = ist_yukle()
+        bugun = simdi_tr().strftime("%Y-%m-%d")
+        ikon = "⏸" if state.durduruldu else "✅"
+        durum = "Duraklatıldı" if state.durduruldu else "Aktif"
+        s = [f"{ikon} <b>FırsatPulsu Panel — {durum}</b>\n"]
+
+        s.append(f"📅 Bugün: <b>{ist.get('gunluk', {}).get(bugun, 0)}</b> fırsat")
+        s.append(f"📈 Toplam: <b>{ist.get('toplam', 0)}</b> fırsat")
+        s.append(f"📬 Kuyruk: {kuyruk.qsize()} / {kuyruk.maxsize}")
+
+        # Çalışma süresi
+        try:
+            import time as _t
+            if getattr(state, "baslangic_zamani", None):
+                gecen = int(_t.time() - state.baslangic_zamani)
+                sa, dk = gecen // 3600, (gecen % 3600) // 60
+                s.append(f"⏱️ Çalışma: {sa}sa {dk}dk")
+        except Exception:
+            pass
+
+        # Yapay zeka
+        try:
+            from utils import gemini
+            g = gemini.istatistik()
+            if g["aktif"]:
+                if g.get("dinlenmede"):
+                    s.append("🤖 Yapay Zeka: 🟡 yedekte (kota/hata)")
+                else:
+                    s.append(f"🤖 Yapay Zeka: 🟢 Gemini ({g['basari']} analiz)")
+            else:
+                s.append("🤖 Yapay Zeka: ⚪ saf-Python")
+        except Exception:
+            pass
+
+        # Kalite ortalaması
+        try:
+            from utils import kalite
+            ka = kalite.istatistik()
+            if ka.get("ortalama") is not None:
+                s.append(f"\n⭐ Ortalama kalite: <b>{ka['ortalama']:.0f}</b> "
+                         f"({ka.get('sayi', 0)} ölçüm)")
+        except Exception:
+            pass
+
+        # Tekrar engelleme
+        try:
+            from utils import duplicate
+            du = duplicate.istatistik()
+            if du.get("son_24s") is not None:
+                s.append(f"🔁 Tekrar engellenen (24s): {du['son_24s']}")
+        except Exception:
+            pass
+
+        # Beğenilen kategoriler + oy
+        try:
+            from utils import segment
+            beg = segment.begenilen_kategoriler(30, limit=4)
+            if beg:
+                satir = ", ".join(f"{b['kategori']} ({b['sayi']})" for b in beg)
+                s.append(f"\n🏆 Beğenilen kategoriler:\n{satir}")
+            oy = segment.oy_ozeti(7)
+            if oy and (oy.get("toplam_iyi") or oy.get("toplam_kotu")):
+                s.append(f"👍 {oy.get('toplam_iyi',0)}  •  👎 {oy.get('toplam_kotu',0)} (7g)")
+        except Exception:
+            pass
+
+        # En etkili saatler
+        try:
+            from utils import zamanlama
+            saatler = zamanlama.en_iyi_saatler(3)
+            if saatler:
+                ss = ", ".join(f"{h}:00" for h in saatler)
+                s.append(f"⏰ Etkili saatler: {ss}")
+        except Exception:
+            pass
+
+        # Kategori abonelikleri
+        try:
+            from utils import istek
+            ka2 = istek.kategori_istatistik()
+            if ka2.get("abone_sayisi"):
+                s.append(f"\n🔔 Kategori aboneleri: {ka2['abone_sayisi']} kişi")
+        except Exception:
+            pass
+
+        # Tıklama (gelir) — sadece aktifse
+        try:
+            import config as _cfg
+            if getattr(_cfg, "TIKLAMA_TAKIP_AKTIF", False):
+                from utils import tiklama
+                tk = tiklama.istatistik(7)
+                s.append(f"🔗 Tıklama (7g): {tk['toplam']}")
+        except Exception:
+            pass
+
+        await event.reply("\n".join(s), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Panel alınamadı: {e}", parse_mode="html")
+
+
+async def _rapor_panosu(event) -> None:
+    """v23.19 — Kapsamlı performans raporu (etkileşim+tıklama+kategori)."""
+    try:
+        from utils import performans
+        await event.reply(performans.haftalik_rapor(7), parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Rapor alınamadı: {e}", parse_mode="html")
+
+
+async def _log_gonder(event) -> None:
+    """v23.21 — Railway/bot logunu dosya olarak gönder (hata teşhisi için)."""
+    try:
+        from utils.log import log_dosya_yolu
+        yol = log_dosya_yolu()
+        if not yol:
+            await event.reply(
+                "📋 Henüz log dosyası oluşmadı.\n"
+                "Bot yeniden başladıktan sonra log birikmeye başlar.",
+                parse_mode="html")
+            return
+        import os
+        boyut = os.path.getsize(yol)
+        boyut_kb = boyut // 1024
+        # Dosya olarak gönder (büyük olabilir, mesaj sınırını aşar)
+        await event.client.send_file(
+            event.chat_id, yol,
+            caption=f"📋 <b>Bot logu</b> (~{boyut_kb} KB)\n"
+                    f"Hata aramak için bu dosyayı paylaşabilirsin.",
+            parse_mode="html",
+            attributes=None,
+            force_document=True)
+    except Exception as e:
+        await event.reply(f"⚠️ Log gönderilemedi: {e}", parse_mode="html")
+
+
+async def _tiklama_panosu(event) -> None:
+    """v23.18 — Tıklama (affiliate gelir) istatistiği."""
+    try:
+        import config
+        if not getattr(config, "TIKLAMA_TAKIP_AKTIF", False):
+            await event.reply(
+                "🔗 <b>TIKLAMA TAKİBİ</b>\n\n"
+                "⏸️ Şu an <b>KAPALI</b> (dormant — hazır, bekliyor).\n\n"
+                "Aktif etmek için Railway'de:\n"
+                "<code>TIKLAMA_TAKIP_AKTIF=1</code>\n"
+                "<code>TIKLAMA_BASE_URL=https://...railway.app</code>\n\n"
+                "Açınca: butonlar redirect'ten geçer, her tıklama kaydedilir, "
+                "hangi ürün/kategori kazandırıyor görürsün.",
+                parse_mode="html")
+            return
+        from utils import tiklama
+        ist = tiklama.istatistik(7)
+        s = f"🔗 <b>TIKLAMA — Son 7 gün</b>\n\n📊 Toplam tıklama: {ist['toplam']}\n"
+        if ist["en_cok"]:
+            s += "\n<b>En çok tıklanan:</b>\n"
+            for ad, sayi in ist["en_cok"][:5]:
+                s += f"  • {(ad or '?')[:30]}: {sayi}\n"
+        if ist["kategori"]:
+            s += "\n<b>Kategori dağılımı:</b>\n"
+            for kat, sayi in ist["kategori"][:5]:
+                s += f"  • {kat}: {sayi}\n"
+        await event.reply(s, parse_mode="html")
+    except Exception as e:
+        await event.reply(f"⚠️ Tıklama panosu alınamadı: {e}", parse_mode="html")
+
+
 async def _karakutu_panosu(event) -> None:
     """Sistem 7: Kara kutu — son olaylar."""
     try:
@@ -1588,6 +1738,8 @@ async def _kullanici_istek_isle(event, kullanici_id: int, metin: str) -> None:
                 "📝 <b>ara iphone 15</b> — ürün araması ekle\n"
                 "📋 <b>isteklerim</b> — aktif aramalarını gör\n"
                 "🗑️ <b>sil iphone 15</b> — aramayı kaldır\n\n"
+                "🔔 <b>abone ol elektronik</b> — kategoriye abone ol\n"
+                "📂 <b>aboneliklerim</b> — takip ettiğin kategoriler\n\n"
                 "Eşleşen bir fırsat geldiğinde sana bildirim göndereceğim.",
                 parse_mode="html")
             return
@@ -1619,6 +1771,40 @@ async def _kullanici_istek_isle(event, kullanici_id: int, metin: str) -> None:
             arama = metin[4:].strip()
             n = istek.istek_sil(kullanici_id, arama)
             await event.reply(f"🗑️ {n} arama kaldırıldı." if n else "Bu arama bulunamadı.",
+                              parse_mode="html")
+            return
+
+        # v23.19 — KATEGORİ ABONELİĞİ komutları
+        if ml.startswith("abone ol ") or ml.startswith("abone "):
+            kat = ml.replace("abone ol ", "").replace("abone ", "").strip()
+            if kat and istek.kategori_abone_ol(kullanici_id, kat):
+                await event.reply(
+                    f"✅ <b>{kat}</b> kategorisine abone oldun!\n"
+                    "Bu kategoride fırsat çıkınca sana özel haber vereceğim.\n\n"
+                    "'<b>aboneliklerim</b>' ile takip ettiklerini gör.",
+                    parse_mode="html")
+            else:
+                await event.reply("⚠️ Abone olunamadı. Örnek: '<b>abone ol elektronik</b>'",
+                                  parse_mode="html")
+            return
+
+        if ml in ("aboneliklerim", "/aboneliklerim", "abonelikler"):
+            liste = istek.aboneliklerim(kullanici_id)
+            if liste:
+                satir = "\n".join(f"  • {k}" for k in liste)
+                await event.reply(
+                    f"🔔 <b>Takip ettiğin kategoriler:</b>\n{satir}\n\n"
+                    "Bırakmak için: '<b>abonelik iptal elektronik</b>'", parse_mode="html")
+            else:
+                await event.reply(
+                    "Henüz kategori aboneliğin yok.\n"
+                    "'<b>abone ol elektronik</b>' gibi ekleyebilirsin.", parse_mode="html")
+            return
+
+        if ml.startswith("abonelik iptal") or ml.startswith("abonelikten çık"):
+            kat = ml.replace("abonelik iptal", "").replace("abonelikten çık", "").strip()
+            n = istek.kategori_abone_iptal(kullanici_id, kat or None)
+            await event.reply(f"🗑️ {n} abonelik iptal edildi." if n else "Abonelik bulunamadı.",
                               parse_mode="html")
             return
 

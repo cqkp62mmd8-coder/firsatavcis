@@ -164,11 +164,22 @@ async def tepki_ekle(client: TelegramClient, mesaj) -> None:
 
 # ── Buton fabrikası ─────────────────────────────────────────────
 
-def _buton_olustur(link: str, bot_client_var: bool, extra_lnk: str | None = None):
+def _buton_olustur(link: str, bot_client_var: bool, extra_lnk: str | None = None,
+                   urun_adi: str = "", kategori: str = "", fiyat: float = 0.0,
+                   magaza: str = ""):
     from telethon.tl.types import (
         KeyboardButtonUrl, KeyboardButtonCallback,
         KeyboardButtonRow, ReplyInlineMarkup,
     )
+    # v23.18 — Tıklama takibi AKTİFSE linki redirect'ten geçir.
+    # KAPALIYKEN (varsayılan) link_sar linki AYNEN döndürür → davranış değişmez.
+    try:
+        from utils import tiklama
+        link = tiklama.link_sar(link, urun_adi, kategori, fiyat, magaza)
+        if extra_lnk:
+            extra_lnk = tiklama.link_sar(extra_lnk, urun_adi, kategori, fiyat, magaza)
+    except Exception:
+        pass   # tıklama modülü sorun çıkarsa orijinal linklerle devam
     satirlar = []
 
     if extra_lnk:
@@ -404,6 +415,28 @@ async def worker(
                                         f"🔔 Aradığın <b>{arama}</b> için fırsat geldi!\n\n"
                                         f"📌 {ad}\n👉 @{config.HEDEF_KANAL.lstrip('@')}",
                                         parse_mode="html")
+                                except Exception:
+                                    pass
+                            # v23.19 — KATEGORİ ABONELERİNE bildirim (kişiselleştirme)
+                            try:
+                                aboneler = istek.kategori_aboneleri(kat)
+                                # Aynı kullanıcıya çift bildirim gitmesin
+                                bildirilen = {k for k, _ in eslesme}
+                                for kullanici_id in aboneler[:50]:
+                                    if kullanici_id in bildirilen:
+                                        continue
+                                    try:
+                                        await izleme._bot_client_ref.send_message(
+                                            kullanici_id,
+                                            f"🔔 Takip ettiğin <b>{kat}</b> kategorisinde fırsat!\n\n"
+                                            f"📌 {ad}\n👉 @{config.HEDEF_KANAL.lstrip('@')}",
+                                            parse_mode="html")
+                                    except Exception:
+                                        pass
+                            except Exception as _e2:
+                                try:
+                                    from utils import karakutu
+                                    karakutu.sessiz_hata("kuyruk.kategori_abone", _e2)
                                 except Exception:
                                     pass
                     except Exception:

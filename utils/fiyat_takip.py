@@ -129,3 +129,45 @@ def istatistik() -> dict:
             return {"izlenen_urun": urun, "fiyat_kaydi": kayit}
     except Exception:
         return {"izlenen_urun": 0, "fiyat_kaydi": 0}
+
+
+def al_bekle_tavsiyesi(kimlik: str, guncel_fiyat: float, gun: int = 90) -> str | None:
+    """v23.19 — Fiyat geçmişine bakıp "şimdi al / bekle" tavsiyesi üret.
+
+    Döner: kısa tavsiye metni (şablonda gösterilir) veya None (yeterli veri yok).
+    Mantık: güncel fiyatın geçmiş aralıktaki konumu (dip/orta/tepe).
+    """
+    if not kimlik or not guncel_fiyat or guncel_fiyat <= 0:
+        return None
+    _ilk_kurulum()
+    try:
+        kesim = int(time.time()) - gun * 86400
+        with db.cursor() as c:
+            satirlar = c.execute(
+                "SELECT fiyat FROM fiyat_gecmis WHERE kimlik=? AND ts>=?",
+                (kimlik, kesim)).fetchall()
+        fiyatlar = [r["fiyat"] for r in satirlar if r["fiyat"] and r["fiyat"] > 0]
+        # Anlamlı tavsiye için en az 4 kayıt gerek
+        if len(fiyatlar) < 4:
+            return None
+        gmin, gmax = min(fiyatlar), max(fiyatlar)
+        ort = sum(fiyatlar) / len(fiyatlar)
+        # Aralık çok darsa (fiyat sabit) tavsiye verme — anlamsız
+        if gmax - gmin < gmax * 0.03:
+            return None
+        # Güncel fiyatın aralıktaki konumu (0=dip, 1=tepe)
+        konum = (guncel_fiyat - gmin) / (gmax - gmin) if gmax > gmin else 0.5
+
+        if guncel_fiyat <= gmin:
+            return "🟢 <b>Tam dip fiyat</b> — son 3 ayın en düşüğü, almak için iyi zaman"
+        if konum <= 0.25:
+            return "🟢 <b>İyi zaman</b> — fiyat son 3 ayın dibe yakın seviyesinde"
+        if konum >= 0.80:
+            return "🟡 <i>Acele etme</i> — fiyat son 3 ayın yüksek seviyesinde, düşebilir"
+        # Orta bölge — ortalamayla kıyasla
+        if guncel_fiyat < ort:
+            return "🟢 <i>Makul fiyat</i> — son 3 ay ortalamasının altında"
+        return None  # orta-üst ama net sinyal yok → sessiz kal
+    except Exception as e:
+        log("UYARI", f"al_bekle_tavsiyesi: {e}")
+        return None

@@ -367,6 +367,15 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
                 durum = fiyat_takip.stok_kontrol(kim)
                 if durum == "yeniden_stokta":
                     s.append("🔄 <i>Yeniden stokta!</i>")
+                # v23.19 — "Şimdi al / bekle" zekâsı (fiyat geçmişi konumu)
+                # "en düşük" rozeti YOKSA göster (çift mesaj olmasın)
+                if not (analiz["en_dusuk_mu"] and analiz["kayit_sayisi"] >= 2):
+                    try:
+                        tavsiye = fiyat_takip.al_bekle_tavsiyesi(kim, yeni_v)
+                        if tavsiye:
+                            s.append(tavsiye)
+                    except Exception:
+                        pass
     except Exception:
         pass
 

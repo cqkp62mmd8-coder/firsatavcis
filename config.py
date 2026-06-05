@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.17-2026.06.01"   # Kupon degeri (100 TL indirim) artik fiyat/kod sanilmiyor + gercek kod yakalaniyor + gorsel indirim rozeti kaldirildi
+SURUM = "v23.21-2026.06.01"   # /log komutu (bot logu dosya olarak) + zengin /durum paneli (kalite, tekrar, kategori, saat, tiklama, calisma suresi)
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
@@ -85,6 +85,14 @@ ADMIN_ID       = os.environ.get("ADMIN_ID", "")
 
 # ── Filtre eşikleri ──────────────────────────────────────────────
 MIN_INDIRIM    = _int_env("MIN_INDIRIM", 20, min_d=0, max_d=99)
+
+# ── TIKLAMA TAKİBİ (v23.18) — DORMANT, varsayılan KAPALI ──────────
+# Affiliate gelir ölçümü için. Açıldığında butonlar redirect üzerinden
+# gider, tıklamalar kaydedilir. KAPALIYKEN bot bugünküyle BİREBİR aynı.
+# Aktif etmek için: TIKLAMA_TAKIP_AKTIF=1 + TIKLAMA_BASE_URL ayarla.
+TIKLAMA_TAKIP_AKTIF = _bool_env("TIKLAMA_TAKIP_AKTIF", False)
+TIKLAMA_BASE_URL    = os.environ.get("TIKLAMA_BASE_URL", "").rstrip("/")
+TIKLAMA_PORT        = _int_env("TIKLAMA_PORT", 8080, min_d=1, max_d=65535)
 MIN_KALITE     = _int_env("MIN_KALITE", 15, min_d=0, max_d=100)
 KUYRUK_BEKLEME = _int_env("KUYRUK_BEKLEME", 180, min_d=0, max_d=86400)
 TEST_MODE      = _bool_env("TEST_MODE", False)

@@ -75,6 +75,19 @@ async def gonder(client: TelegramClient) -> None:
     except Exception as e:
         log("HATA", f"Haftalık rapor: {e}")
 
+    # v23.19 — ADMİN'e ayrıca kapsamlı performans raporu (iç metrikler)
+    # Kanala değil, sadece admin'e: tıklama, beğeni, kategori, öneri.
+    try:
+        from utils import performans, izleme
+        rapor = performans.haftalik_rapor(7)
+        if izleme._bot_client_ref is not None and config.ADMIN_ID:
+            await izleme._bot_client_ref.send_message(config.ADMIN_ID, rapor, parse_mode="html")
+        elif config.ADMIN_ID:
+            await client.send_message(config.ADMIN_ID, rapor, parse_mode="html")
+        log("OK", "Admin performans raporu gönderildi")
+    except Exception as e:
+        log("UYARI", f"Admin performans raporu: {e}")
+
 
 async def zamanlayici(client: TelegramClient) -> None:
     while True:

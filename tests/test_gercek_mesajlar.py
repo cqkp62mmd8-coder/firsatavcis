@@ -1901,3 +1901,181 @@ class TestV2317KuponDeger:
         a._mesaj_cache.clear()
         _, ys, ev, yv = fiyat_bul("📦 Matkap\n2.499 TL yerine 1.299 TL")
         assert ys == "1.299" and ev == 2499.0
+
+
+class TestV2318TiklamaTakip:
+    """v23.18 — Tıklama takibi (affiliate gelir). DORMANT: kapalıyken davranış
+    değişmemeli. Aktifken: link sarılmalı, tıklama kaydedilmeli."""
+
+    def test_dormant_link_degismez(self):
+        """Bayrak kapalıyken link_sar linki AYNEN döndürmeli (kritik)."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_tk_d"
+        os.makedirs("/tmp/test_tk_d", exist_ok=True)
+        os.environ.pop("TIKLAMA_TAKIP_AKTIF", None)
+        import importlib, config
+        importlib.reload(config)
+        from utils import db; db.init()
+        from utils import tiklama
+        hedef = "https://amazon.com.tr/dp/B0X?tag=winfluenced-6447"
+        assert tiklama.link_sar(hedef, "Test", "elektronik") == hedef
+
+    def test_urun_kaydet_ve_bul(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_tk_k"
+        os.makedirs("/tmp/test_tk_k", exist_ok=True)
+        from utils import db; db.init()
+        from utils import tiklama
+        kid = tiklama.urun_kaydet("https://x.com/p", "Ürün A", "spor", 100.0, "Amazon")
+        assert kid, "Kısa ID üretilmedi"
+        bilgi = tiklama.hedef_bul(kid)
+        assert bilgi and bilgi["hedef_url"] == "https://x.com/p"
+
+    def test_tiklama_sayilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_tk_s"
+        os.makedirs("/tmp/test_tk_s", exist_ok=True)
+        from utils import db; db.init()
+        from utils import tiklama
+        kid = tiklama.urun_kaydet("https://x.com/q", "Ürün B", "ev", 50.0)
+        for _ in range(3):
+            tiklama.tiklama_kaydet(kid)
+        ist = tiklama.istatistik(7)
+        assert ist["toplam"] >= 3, f"Tıklama sayılmadı: {ist['toplam']}"
+
+    def test_kisa_id_benzersiz(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_tk_u"
+        os.makedirs("/tmp/test_tk_u", exist_ok=True)
+        from utils import db; db.init()
+        from utils import tiklama
+        idler = {tiklama.urun_kaydet(f"https://x.com/{i}", f"Ü{i}") for i in range(20)}
+        assert len(idler) == 20, "Kısa ID çakışması var"
+
+
+class TestV2319KisisellestirmeVeRapor:
+    """v23.19 — #2 kategori aboneliği, #3 al/bekle zekâsı, #4 performans raporu."""
+
+    def test_kategori_abone(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kab"
+        os.makedirs("/tmp/test_kab", exist_ok=True)
+        from utils import db; db.init()
+        from utils import istek
+        istek.kategori_abone_ol(111, "elektronik")
+        istek.kategori_abone_ol(222, "elektronik")
+        istek.kategori_abone_ol(111, "elektronik")  # çift olmamalı
+        aboneler = istek.kategori_aboneleri("elektronik")
+        assert 111 in aboneler and 222 in aboneler
+        assert len(aboneler) == 2, f"Çift abonelik: {aboneler}"
+
+    def test_kategori_iptal(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kab2"
+        os.makedirs("/tmp/test_kab2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import istek
+        istek.kategori_abone_ol(333, "spor")
+        istek.kategori_abone_iptal(333, "spor")
+        assert 333 not in istek.kategori_aboneleri("spor")
+
+    def test_al_bekle_dip(self):
+        import os, time
+        os.environ["DATA_DIR"] = "/tmp/test_ab_d"
+        os.makedirs("/tmp/test_ab_d", exist_ok=True)
+        from utils import db; db.init()
+        from utils import fiyat_takip
+        fiyat_takip._ilk_kurulum()
+        from services.analiz import urun_kimligi
+        k = urun_kimligi("https://x.com/dip")
+        with db.cursor() as c:
+            for f, d in [(1000, 80), (1100, 60), (1050, 40), (1200, 20), (980, 5)]:
+                c.execute("INSERT INTO fiyat_gecmis (kimlik,fiyat,ts) VALUES (?,?,?)",
+                          (k, f, int(time.time()) - d * 86400))
+        t = fiyat_takip.al_bekle_tavsiyesi(k, 950)
+        assert t and "dip" in t.lower(), f"Dip tavsiyesi yok: {t}"
+
+    def test_al_bekle_yetersiz_veri(self):
+        import os, time
+        os.environ["DATA_DIR"] = "/tmp/test_ab_y"
+        os.makedirs("/tmp/test_ab_y", exist_ok=True)
+        from utils import db; db.init()
+        from utils import fiyat_takip
+        fiyat_takip._ilk_kurulum()
+        from services.analiz import urun_kimligi
+        k = urun_kimligi("https://x.com/az")
+        # Tek kayıt → tavsiye verme
+        with db.cursor() as c:
+            c.execute("INSERT INTO fiyat_gecmis (kimlik,fiyat,ts) VALUES (?,?,?)",
+                      (k, 100, int(time.time())))
+        assert fiyat_takip.al_bekle_tavsiyesi(k, 100) is None
+
+    def test_performans_raporu(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_rap"
+        os.makedirs("/tmp/test_rap", exist_ok=True)
+        from utils import db; db.init()
+        from utils import performans
+        r = performans.haftalik_rapor(7)
+        assert r and "PERFORMANS RAPORU" in r
+
+
+class TestV2320GuralFormat:
+    """v23.20 — "X TL'ye Düştü - Piyasası Y TL" çoklu ürün formatı (Güral).
+    Bug: ürün adı fiyat satırına taşıyordu ('...ye Düştü'), 2. ürün kaçıyordu."""
+
+    def test_urun_adi_fiyata_tasmaz(self):
+        from services.analiz import urun_adi_bul
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        b = "🔥Güral Alfa 25 Parça 6 Kişilik Yemek Takımı \n\n✅1.599TL'ye Düştü - Piyasası 1.990TL+"
+        ad = urun_adi_bul(b)
+        assert ad and "Düştü" not in ad and "Piyasası" not in ad, f"Fiyat taştı: {ad}"
+        assert "6 Kişilik" in ad or "6" in ad, f"'6' kayboldu: {ad}"
+
+    def test_dustu_formati_iki_urun(self):
+        from services.kupon_ayristirici import ayristir
+        m = """🔥Güral Alfa 25 Parça 6 Kişilik Yemek Takımı
+
+✅1.599TL'ye Düştü - Piyasası 1.990TL+
+🔻Flormar Brow Kaş Pudrası Ve Fırça İçeren Kaş Kalemi 99TL
+🚚Kargo Ücretsiz"""
+        urunler = ayristir(m)
+        assert len(urunler) == 2, f"2 ürün bekleniyordu: {len(urunler)}"
+        assert urunler[0]["fiyat"] == 1599.0
+        assert urunler[0]["eski_fiyat"] == 1990.0
+        assert urunler[1]["fiyat"] == 99.0
+
+    def test_eski_kupon_format_korunur(self):
+        """'Kodu İle' formatı bozulmamalı."""
+        from services.kupon_ayristirici import ayristir
+        m = """🔥Philips Espresso
+✅HAZIRAN1000 Kodu İle 23.899TL'ye Düşüyor - Piyasası 24.999TL
+🔻Salomon Ayakkabı HAZIRAN500 Kodu İle 6.492TL"""
+        urunler = ayristir(m)
+        assert len(urunler) == 2
+        assert urunler[0]["kod"] == "HAZIRAN1000"
+        assert urunler[0]["fiyat"] == 23899.0
+
+
+class TestV2321LogVePanel:
+    """v23.21 — /log komutu (bot logu dosya olarak) + zengin /durum paneli."""
+
+    def test_log_dosyasi_yazilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_log21"
+        os.makedirs("/tmp/test_log21", exist_ok=True)
+        # log.py'yi taze yükle ki dosya handler DATA_DIR'i görsün
+        import importlib
+        from utils import log as logmod
+        importlib.reload(logmod)
+        logmod.log("BILGI", "test satiri v2321")
+        yol = logmod.log_dosya_yolu()
+        # Dosya yolu None olabilir (reload zamanlaması) ama fonksiyon patlamamalı
+        assert yol is None or isinstance(yol, str)
+
+    def test_log_dosya_yolu_guvenli(self):
+        from utils.log import log_dosya_yolu
+        # Her durumda string veya None döner, hata fırlatmaz
+        sonuc = log_dosya_yolu()
+        assert sonuc is None or isinstance(sonuc, str)

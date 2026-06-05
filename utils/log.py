@@ -46,6 +46,31 @@ if not _logger.handlers:
     _stream.setFormatter(_formatter)
     _logger.addHandler(_stream)
 
+    # v23.21 — DOSYA handler: tüm logu kalıcı dosyaya yaz (/log komutu için).
+    # DATA_DIR Railway volume'u → yeniden başlatmada korunur, baştan tutar.
+    # Döngüsel: dosya 3MB'ı geçince eski yarısı atılır (disk şişmez).
+    try:
+        from logging.handlers import RotatingFileHandler
+        _data_dir = os.environ.get("DATA_DIR", ".")
+        os.makedirs(_data_dir, exist_ok=True)
+        _log_dosya = os.path.join(_data_dir, "firsatpulsu.log")
+        _file = RotatingFileHandler(
+            _log_dosya, maxBytes=3 * 1024 * 1024, backupCount=1, encoding="utf-8")
+        _file.setFormatter(_formatter)
+        _logger.addHandler(_file)
+    except Exception:
+        pass   # dosya yazılamıyorsa stdout yeterli, bot çökmez
+
+
+def log_dosya_yolu() -> str | None:
+    """/log komutu için: aktif log dosyasının yolu (yoksa None)."""
+    try:
+        _data_dir = os.environ.get("DATA_DIR", ".")
+        yol = os.path.join(_data_dir, "firsatpulsu.log")
+        return yol if os.path.exists(yol) else None
+    except Exception:
+        return None
+
 
 # ── Eski log() API'si — uyumluluk için korundu ──────────────────
 # Eski seviye isimleri → standart logging level

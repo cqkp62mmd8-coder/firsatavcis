@@ -22,10 +22,14 @@ import re
 _KOD = re.compile(r"\b([A-ZÇĞİÖŞÜ]{3,}\d{2,})\b")
 # "Kodu İle X TL'ye Düşüyor" / "Kodu İle X TL" → gerçek indirimli fiyat
 _INDIRIMLI = re.compile(r"[Kk]odu\s+İle\s+([\d.,]+)\s*TL", re.I)
+# v23.20 — "X TL'ye Düştü/Düşüyor" → kodsuz indirimli fiyat (Güral formatı)
+_DUSTU = re.compile(r"([\d.,]+)\s*TL['\u2019]?\s*ye\s+[Dd]üş", re.I)
 # "Piyasası X TL" / "Normal X TL" → eski/piyasa fiyatı
 _PIYASA = re.compile(r"(?:[Pp]iyasası|[Nn]ormal(?:i)?|[Ee]ski)\s+(?:[Ff]iyat[ıi]?\s+)?([\d.,]+)\s*TL", re.I)
 # "X/Y TL" indirim açıklaması → bu bir FİYAT DEĞİL (kupon mekaniği)
 _INDIRIM_ACIK = re.compile(r"\d+\s*/\s*\d+\s*TL")
+# Ürün başlığı işareti (🔥🔻 ile başlayan satır = yeni ürün)
+_BASLIK = re.compile(r"^[🔥🔻🆕⚡🎯]")
 
 
 def _fiyat_to_float(s: str) -> float | None:
@@ -50,40 +54,60 @@ def _fiyat_to_float(s: str) -> float | None:
 
 
 def kupon_mesaji_mi(metin: str) -> bool:
-    """Bu mesaj kupon-kodu formatında mı? (en az 1 kod + 'Kodu İle' kalıbı)"""
+    """Bu mesaj kupon/çoklu-fırsat formatında mı?
+    (kod+'Kodu İle' VEYA 'X TL'ye Düştü' kalıbı)"""
     if not metin:
         return False
-    return bool(_KOD.search(metin) and _INDIRIMLI.search(metin))
+    if _KOD.search(metin) and _INDIRIMLI.search(metin):
+        return True
+    # v23.20 — "X TL'ye Düştü - Piyasası Y TL" formatı (kodsuz, Güral)
+    if _DUSTU.search(metin) and _PIYASA.search(metin):
+        return True
+    return False
 
 
 def ayristir(metin: str) -> list[dict]:
-    """Kupon mesajını ürünlere ayır.
+    """Kupon/çoklu-fırsat mesajını ürünlere ayır.
 
     Döner: [{urun, kod, fiyat, eski_fiyat}, ...] — ilk eleman ANA üründür.
-    Boş liste → kupon mesajı değil veya çözülemedi.
+    Boş liste → uygun format değil veya çözülemedi.
     """
     if not kupon_mesaji_mi(metin):
         return []
 
     satirlar = [s.strip() for s in metin.split("\n") if s.strip()]
     urunler = []
-    # İlk satır genelde ana ürün adı (🔥 ile başlar, kod/fiyat içermez)
-    ana_urun_adi = None
-    if satirlar:
-        ilk = satirlar[0]
-        if not _INDIRIMLI.search(ilk) and not _KOD.search(ilk):
-            # Emoji temizle, ürün adı al
-            ana_urun_adi = re.sub(r"^[^\wA-Za-zÇĞİÖŞÜ]+", "", ilk).strip()
+
+    # "Son görülen başlık" — kodsuz fiyat satırı için ürün adını buradan al.
+    # Format: 🔥ÜrünAdı \n (boş) \n ✅1.599TL'ye Düştü ...
+    son_baslik = None
+
+    def _baslik_temizle(s):
+        return re.sub(r"^[^\wA-Za-zÇĞİÖŞÜ]+", "", s).strip()
 
     for satir in satirlar:
-        # Kupon açıklama satırı (X/Y TL indirim) → atla, fiyat içermez
+        # Kupon açıklama satırı (X/Y TL) → fiyat kısmını maskele
         temiz_satir = _INDIRIM_ACIK.sub("", satir)
 
-        indirimli = _INDIRIMLI.search(temiz_satir)
-        if not indirimli:
-            continue  # bu satırda gerçek fiyat yok
+        # Bu satır bir ürün BAŞLIĞI mı? (🔥🔻 ile başlıyor)
+        baslik_mi = bool(_BASLIK.match(satir))
 
-        fiyat = _fiyat_to_float(indirimli.group(1))
+        # Fiyat var mı? (Kodu İle X / X TL'ye Düştü)
+        indirimli = _INDIRIMLI.search(temiz_satir) or _DUSTU.search(temiz_satir)
+        fiyat = _fiyat_to_float(indirimli.group(1)) if indirimli else None
+
+        # Başlık satırında inline fiyat olabilir (🔻Flormar ... 99TL) — onu da dene
+        if not fiyat and baslik_mi:
+            inline = re.search(r"([\d.,]+)\s*TL", temiz_satir)
+            if inline:
+                fiyat = _fiyat_to_float(inline.group(1))
+
+        # Başlık satırı ama HİÇ fiyat yok → ürün adı olarak hatırla, sonraki
+        # fiyat satırına bağla (🔥Güral \n ✅1.599TL'ye Düştü)
+        if baslik_mi and not fiyat:
+            son_baslik = _baslik_temizle(satir)
+            continue
+
         if not fiyat or fiyat < 10:
             continue
 
@@ -93,19 +117,26 @@ def ayristir(metin: str) -> list[dict]:
         piyasa_m = _PIYASA.search(temiz_satir)
         eski = _fiyat_to_float(piyasa_m.group(1)) if piyasa_m else None
 
-        # Bu satırın ürün adını çıkar: koddan ÖNCEki kısım, yoksa ana ürün
+        # Ürün adını belirle (öncelik sırası):
         satir_urun = None
-        # "🔻Salomon Ayakkabı HAZIRAN500 Kodu İle" → "Salomon Ayakkabı"
         if kod:
-            on = satir.split(kod)[0]
-            on = re.sub(r"^[^\wA-Za-zÇĞİÖŞÜ]+", "", on).strip()
-            # Çok kısa değilse (en az 2 kelime, marka adı) ürün adıdır
+            # "🔻Salomon Ayakkabı HAZIRAN500 Kodu İle" → koddan öncesi
+            on = _baslik_temizle(satir.split(kod)[0])
             if len(on.split()) >= 2 and not _INDIRIMLI.search(on):
                 satir_urun = on
+        elif baslik_mi:
+            # Aynı satırda başlık+fiyat (Flormar): fiyat/TL kısmını at, adı al
+            on = _baslik_temizle(satir)
+            on = re.sub(r"\s*[\d.,]+\s*TL.*$", "", on, flags=re.I).strip()
+            on = _DUSTU.sub("", on).strip()
+            if len(on.split()) >= 2:
+                satir_urun = on
 
-        urun_adi = satir_urun or ana_urun_adi
+        # Kodsuz fiyat satırı (✅1.599TL'ye Düştü) → son başlığı kullan
+        urun_adi = satir_urun or son_baslik
         if not urun_adi:
             continue
+        son_baslik = None  # kullanıldı, sıfırla
 
         urunler.append({
             "urun": urun_adi,
