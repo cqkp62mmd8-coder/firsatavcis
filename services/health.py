@@ -266,6 +266,39 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ku
                 f"Content-Length: {len(html)}\r\n"
                 f"Connection: close\r\n\r\n"
             ).encode("utf-8") + html
+        elif yol.startswith("/git/"):
+            # v23.24 — Tıklama takibi: ayrı redirect sunucusu YERİNE buraya
+            # eklendi (Railway tek public porta yönlendirir, port çakışması
+            # 'address already in use' hatası bu yüzden çıkıyordu). Kısa
+            # kimliği çöz, tıklamayı kaydet, gerçek (affiliate) URL'ye 302 at.
+            kid = yol[len("/git/"):].split("?")[0].split("#")[0].strip("/")
+            hedef = None
+            try:
+                from utils import tiklama
+                bilgi = tiklama.hedef_bul(kid)
+                if bilgi and bilgi.get("hedef_url"):
+                    hedef = bilgi["hedef_url"]
+                    try:
+                        tiklama.tiklama_kaydet(kid)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            if hedef:
+                cevap = (
+                    f"HTTP/1.1 302 Found\r\n"
+                    f"Location: {hedef}\r\n"
+                    f"Content-Length: 0\r\n"
+                    f"Connection: close\r\n\r\n"
+                ).encode("utf-8")
+            else:
+                body = b"Link bulunamadi."
+                cevap = (
+                    f"HTTP/1.1 404 Not Found\r\n"
+                    f"Content-Type: text/plain; charset=utf-8\r\n"
+                    f"Content-Length: {len(body)}\r\n"
+                    f"Connection: close\r\n\r\n"
+                ).encode("utf-8") + body
         else:
             html = b"<h1>FirsatPulsu Bot</h1><p>Calisiyor. <a href='/health'>Health</a> | <a href='/panel'>Panel</a></p>"
             cevap = (

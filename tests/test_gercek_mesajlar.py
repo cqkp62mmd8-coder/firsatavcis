@@ -2166,3 +2166,62 @@ class TestV2323SahteIndirimVeKurtarma:
         s = olustur(blok, 0, ["https://amazon.com.tr/dp/B0X"], gemini=None,
                     kurtarilan_urun="GP Batteries GPA76 Düğme Pil")
         assert s and "FIRSAT" in s
+
+
+class TestV2324RedirectPortCakisma:
+    """v23.24 — Tıklama redirect'i health sunucusuna taşındı (/git/).
+    Port çakışması ('address already in use') çözüldü — ayrı sunucu yok."""
+
+    def _git_iste(self, kid, data_dir):
+        import os, asyncio
+        os.environ["DATA_DIR"] = data_dir
+        os.makedirs(data_dir, exist_ok=True)
+        from utils import db; db.init()
+        import services.health as h
+
+        class FakeReader:
+            def __init__(s, istek): s.istek = istek.encode()
+            async def read(s, n): return s.istek
+        class FakeWriter:
+            def __init__(s): s.veri = b""
+            def write(s, d): s.veri += d
+            async def drain(s): pass
+            def close(s): pass
+            async def wait_closed(s): pass
+
+        r = FakeReader(f"GET /git/{kid} HTTP/1.1\r\n\r\n")
+        w = FakeWriter()
+        asyncio.new_event_loop().run_until_complete(h._handle(r, w, kuyruk=None))
+        return w.veri.decode("utf-8", errors="ignore")
+
+    def test_git_redirect_302(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_git1"
+        os.makedirs("/tmp/test_git1", exist_ok=True)
+        from utils import db; db.init()
+        from utils import tiklama
+        kid = tiklama.urun_kaydet("https://amazon.com.tr/dp/B0X?tag=aff", "Ürün", "ev")
+        cevap = self._git_iste(kid, "/tmp/test_git1")
+        assert "302" in cevap and "tag=aff" in cevap
+
+    def test_git_tiklama_sayilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_git2"
+        os.makedirs("/tmp/test_git2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import tiklama
+        kid = tiklama.urun_kaydet("https://x.com/p", "Ürün2", "spor")
+        self._git_iste(kid, "/tmp/test_git2")
+        assert tiklama.istatistik(7)["toplam"] >= 1
+
+    def test_git_gecersiz_404(self):
+        cevap = self._git_iste("yokboyle123", "/tmp/test_git3")
+        assert "404" in cevap
+
+    def test_redirect_sunucu_kullanim_disi(self):
+        """Eski ayrı sunucu çağrılırsa hiçbir port açmamalı (None döner)."""
+        import asyncio
+        from services import redirect_sunucu
+        sonuc = asyncio.new_event_loop().run_until_complete(
+            redirect_sunucu.sunucu_baslat(port=9999))
+        assert sonuc is None

@@ -455,16 +455,16 @@ async def main() -> None:
                 "model_egitim":  lambda: _model_egitim_dongusu(),
                 "health":        lambda: health.baslat(kuyruk, port=_port),
             }
-            # v23.18 — Tıklama takibi AKTİFSE redirect sunucusunu da başlat.
-            # Kapalıyken (varsayılan) bu blok atlanır, port açılmaz, davranış değişmez.
+            # v23.24 — Tıklama takibi AKTİFSE: redirect ARTIK ayrı sunucu DEĞİL,
+            # health sunucusunun içinde (/git/ yolu). Railway tek public porta
+            # yönlendirdiği için ayrı port 'address already in use' veriyordu.
+            # Burada sadece BASE_URL kontrolü yapılır; ek sunucu başlatılmaz.
             if getattr(config, "TIKLAMA_TAKIP_AKTIF", False):
-                from services import redirect_sunucu
-                _tport = getattr(config, "TIKLAMA_PORT", 8080)
-                _gorev_fabrikalari["redirect_sunucu"] = \
-                    lambda: redirect_sunucu.sunucu_baslat(port=_tport)
                 if not getattr(config, "TIKLAMA_BASE_URL", ""):
                     log("UYARI", "TIKLAMA_TAKIP_AKTIF=1 ama TIKLAMA_BASE_URL boş! "
                                  "Linkler sarılmayacak. Railway public URL'yi ayarlayın.")
+                else:
+                    log("OK", "🔗 Tıklama takibi AKTİF — redirect health sunucusunda (/git/)")
             _gorev_yeniden_baslat_sayilari: dict[str, int] = {}
 
             def _supervise(ad: str):
