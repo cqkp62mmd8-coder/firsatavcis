@@ -153,23 +153,30 @@ def _ozel_etiket(metin: str) -> str | None:
 # ── Ürün bloğu (yeni minimalist) ────────────────────────────────
 
 def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | None = None,
-                onceden_lnk: str | None = None, gemini: dict | None = None) -> list[str]:
+                onceden_lnk: str | None = None, gemini: dict | None = None,
+                urun_adi: str | None = None) -> list[str]:
     # onceden_lnk: çoklu modda direkt link geçilirse magaza_bul daha doğru çalışır
     # gemini: Gemini analiz sonucu — varsa ürün adı + akıllı tanıtım cümlesi kullanılır
+    # urun_adi: v23.28 — olustur'un hesapladığı NİHAİ ad (kurtarılan/Gemini dahil).
+    #   Verilirse blok'tan yeniden çıkarmak yerine bu kullanılır; böylece KURTARMA
+    #   ile gelen ad gövdede de görünür (eskiden burada yeniden çıkarılıp
+    #   başarısız olunca "Alışveriş fırsatı" sahte adına düşülüyordu).
     lnk          = onceden_lnk or link_bul(metin, btn_links)
     magaza       = magaza_bul(metin, lnk)
     # Ürün adı: Gemini'nin temiz çıkardığı ad öncelikli
     # v23.0 — TEK MERKEZİ KAPI'dan geçir
     # v23.8 — Gemini kopuk parça verebilir, saf-Python ile KARŞILAŞTIR
     from services.urun_kapisi import gecerli_urun_adi as _kapi, en_iyi_urun_adi as _eniyi0, guzellestir as _guzel0
-    if gemini and gemini.get("urun_adi"):
+    if urun_adi:
+        urun = urun_adi  # olustur zaten merkezi kapıdan geçirdi + güzelleştirdi
+    elif gemini and gemini.get("urun_adi"):
         _gb = _kapi(gemini["urun_adi"], metin)
         _pb = _kapi(urun_adi_bul(metin), metin)
         urun = _eniyi0(_gb, _pb, metin) or _pb or urun_adi_bul(metin)
     else:
         urun = urun_adi_bul(metin)
     # v23.9 — Uzun teknik adı okunabilir hale getir
-    if urun:
+    if urun and not urun_adi:
         urun = _guzel0(urun)
     eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
     # v23.16 — TUTARLILIK: İki fiyat belliyse indirim oranını OTOMATİK hesapla.
@@ -307,9 +314,13 @@ def _urun_blogu(metin: str, indirim: int, btn_links: list[str], numara: int | No
         if urun:
             s.append(f"<b>{urun}</b>")
         elif kat != "genel":
-            s.append(f"<b>{kat_yazi} fırsatı</b>")
+            # v23.28 — Adsız ürün buraya normalde ULAŞMAZ (olustur 461. satırda
+            # adsız tekil ürünü düşürür). Yalnızca marka kampanyası adsız geldiğinde
+            # erişilir; o durumda "Alışveriş fırsatı" gibi sahte ÜRÜN adı yerine
+            # mağaza odaklı kampanya başlığı kullan (yanıltıcı değil).
+            s.append(f"<b>{magaza} kampanyası</b>")
         else:
-            s.append(f"<b>İndirimli ürün</b>")
+            s.append(f"<b>{magaza} kampanyası</b>")
         # Gemini akıllı tanıtım cümlesi (varsa) — ürün adının altında, şık
         # v23.2 — DOĞRULA: kategoriyle çelişen uydurma açıklamaları at
         # ("Otogizoshi" kitabı için "aracınız için pratik çözüm" gibi)
@@ -521,7 +532,7 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     # Trend için mağazayı kayıt
     trend_kaydet(mag)
 
-    s = _urun_blogu(metin, indirim, bl, gemini=gemini)
+    s = _urun_blogu(metin, indirim, bl, gemini=gemini, urun_adi=_urun)
     s += ["", hashtag, f"@{kanal}"]
     cikti = "\n".join(s)
 

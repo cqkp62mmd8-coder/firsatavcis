@@ -2252,9 +2252,20 @@ class TestV2325ReklamVeEngelliGonderici:
 
     def test_hashtag_sponsorlu_engellenir(self):
         from utils import reklam
-        for etiket in ["#sponsorlu", "#reklam", "#işbirliği"]:
+        # v23.29 — #işbirliği ÇIKARILDI (affiliate bildirimi, çoğu üründe var).
+        # #sponsorlu/#reklam gerçek reklam işareti olarak kalır.
+        for etiket in ["#sponsorlu", "#reklam"]:
             r, _ = reklam.reklam_mi(f"Harika ürün 500 TL {etiket}", "", "Ürün", fiyat_var=True)
             assert r is True, f"{etiket} engellenmedi"
+
+    def test_isbirligi_gercek_urun_paylasilir(self):
+        """v23.29 — #İşbirliği'li GERÇEK ürün (somut ad + fiyat) ENGELLENMEMELİ.
+        Türkiye'de fırsat kanalları bu etiketi çoğu affiliate ürüne ekliyor."""
+        from utils import reklam
+        for varyant in ["#İşbirliği", "#İŞBİRLİĞİ", "#işbirliği"]:
+            m = f"📦 Penti Kadın Dantelli Kısa Çorap {varyant}\n💰 210 TL"
+            r, _ = reklam.reklam_mi(m, "", "Penti Kadın Dantelli Kısa Çorap", fiyat_var=True)
+            assert r is False, f"{varyant} ile gerçek ürün yanlışlıkla engellendi"
 
     def test_engelli_gonderici_config(self):
         import importlib, config
@@ -2354,3 +2365,68 @@ class TestV2327SloganVeCokluLink:
         sonuc = _coklu_link_satir_ayir("🔥 SÜPER FIRSATLAR 🔥\nKaçırma!",
                                        ["https://a", "https://b"], "x")
         assert sonuc is None
+
+
+class TestV2328TurkceIveAdsizUrun:
+    """v23.28 — Türkçe-İ reklam engelleme (#İşbirliği büyük İ) + adsız ürün
+    'Alışveriş fırsatı' sahte adı kaldırıldı + kurtarılan ad gövdede görünüyor."""
+
+    def test_isbirligi_buyuk_I_gercek_urun_paylasilir(self):
+        """v23.29 — #İşbirliği (büyük/küçük İ) affiliate bildirimi; gerçek ürün
+        engellenmemeli. (Türkçe-İ küçültme düzeltmesi #sponsorlu için korunur.)"""
+        from utils import reklam
+        penti = ("📦 Penti Kadın Dantelli Kısa Çorap\n🔍 Google'da Karşılaştır #İşbirliği\n"
+                 "⚡️ İndirimli Fiyat: ₺210,00\n💰 Normal Fiyat: ₺504,93")
+        for varyant in ["#İşbirliği", "#İŞBİRLİĞİ", "#işbirliği"]:
+            m = penti.replace("#İşbirliği", varyant)
+            r, _ = reklam.reklam_mi(m, "", "Penti Kadın Dantelli Kısa Çorap", fiyat_var=True)
+            assert r is False, f"{varyant} ile gerçek ürün yanlışlıkla engellendi"
+
+    def test_sponsorlu_turkce_I_hala_engellenir(self):
+        """#sponsorlu büyük harfli yazımlar hâlâ engellenmeli (Türkçe-İ düzeltmesi)."""
+        from utils import reklam
+        r, _ = reklam.reklam_mi("Yatırım fırsatı 110.000 TL #SPONSORLU\nHemen Başvur",
+                                "", "", fiyat_var=True)
+        assert r is True
+
+    def test_adsiz_tekil_urun_paylasilmaz(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_adsiz28"
+        os.makedirs("/tmp/test_adsiz28", exist_ok=True)
+        from utils import db; db.init()
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Ürün adı çıkmayan tekil ürün → None (sahte ad üretme)
+        s = olustur("₺210,00\n💰 Normal: ₺504,93\n-%58", 58,
+                    ["https://amazon.com.tr/dp/B0X"], gemini=None)
+        assert s is None
+
+    def test_alisveris_firsati_sahte_ad_yok(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_af28"
+        os.makedirs("/tmp/test_af28", exist_ok=True)
+        from utils import db; db.init()
+        from services.sablon import olustur
+        import services.analiz as a
+        # Çeşitli mesajlarda "Alışveriş fırsatı" sahte adı asla çıkmamalı
+        for m in ["📦 Penti Çorap\n₺210,00\n💰 Normal: ₺504,93",
+                  "💰 149 TL\nhttps://amazon.com.tr/dp/B0X"]:
+            a._mesaj_cache.clear()
+            s = olustur(m, 50, ["https://amazon.com.tr/dp/B0X"], gemini=None,
+                        kurtarilan_urun="GP Batteries Düğme Pil")
+            assert s is None or "Alışveriş fırsatı" not in s
+
+    def test_kurtarilan_ad_govdede_gorunur(self):
+        """v23.23 fix tamamlandı: kurtarılan ad artık gövdede de kullanılıyor."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kg28"
+        os.makedirs("/tmp/test_kg28", exist_ok=True)
+        from utils import db; db.init()
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        s = olustur("💰 149 TL\nhttps://amazon.com.tr/dp/B0X", 0,
+                    ["https://amazon.com.tr/dp/B0X"], gemini=None,
+                    kurtarilan_urun="GP Batteries GPA76 Düğme Pil")
+        assert s and "GP Batteries" in s

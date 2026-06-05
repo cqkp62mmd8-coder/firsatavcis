@@ -55,17 +55,28 @@ def reklam_mi(metin: str, link: str = "", urun_adi: str = "",
     if not metin or len(metin.strip()) < 3:
         return True, "boş/çok kısa"
 
-    ml = metin.lower()
+    # v23.28 — Türkçe-duyarlı küçük harf. Python'un .lower() metodu "İ"yi
+    # birleşik noktalı "i̇"ye çevirir ve "#İşbirliği" → "#işbirliği" eşleşmesi
+    # KAÇAR. Önce İ→i, I→ı dönüştürüp sonra küçült: tüm büyük/küçük varyantlar
+    # ("#İşbirliği", "#İŞBİRLİĞİ", "#işbirliği") artık yakalanır.
+    ml = metin.replace("İ", "i").replace("I", "ı").lower()
 
     # ── v23.25 — KESİN REKLAM İŞARETLERİ (fiyat/ürün ne olursa olsun reklam) ──
     # Bu sinyaller varsa mesaj kesinlikle bir tanıtım/duyurudur; somut ürün
     # adı veya fiyat görünse bile (reklamlar da fiyat/slogan içerir) engellenir.
     # Canlıda "Fuzul Topraktan #sponsorlu ... Hemen Başvur" reklamı, sahte bir
     # ürün adıyla (slogan) ürün sanılıp paylaşılmıştı.
+    # v23.29 — "#işbirliği" / "iş birliği" KESİN reklam listesinden ÇIKARILDI.
+    # Türkiye'deki fırsat kanalları bu etiketi neredeyse TÜM affiliate ürün
+    # paylaşımlarına yasal bildirim olarak ekliyor; bir reklam işareti değil.
+    # Engellemek Omo/Kellogg's/Philips gibi gerçek ürünleri eliyordu. Reklam
+    # kararı artık Gemini + yapısal mantığa bırakılır (somut ürün + fiyat varsa
+    # paylaşılır). "#sponsorlu" (ücretli reklam) ve başvuru/yatırım kalıpları
+    # gerçek reklam işareti olarak KALIR (emlak/yatırım reklamlarını yakalar).
     _kesin_reklam = [
-        "#sponsorlu", "#sponsor", "#reklam", "#işbirliği", "#isbirligi",
-        "#advertorial", "#tanıtım", "#tanitim", "#ad ", "#ücretlitanıtım",
-        "sponsorlu içerik", "reklam içerir", "iş birliği",
+        "#sponsorlu", "#sponsor", "#reklam",
+        "#advertorial", "#ücretlitanıtım",
+        "sponsorlu içerik", "reklam içerir",
         # Başvuru/kayıt çağrıları (ürün satışı değil, yönlendirme)
         "hemen başvur", "hemen basvur", "başvuru yap", "basvuru yap",
         "hemen kayıt", "üye ol", "uye ol", "kayıt ol", "kayit ol",
