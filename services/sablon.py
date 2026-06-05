@@ -425,17 +425,16 @@ def _marka_kampanya_gecerli(metin: str) -> bool:
 
 
 def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
-            gemini: dict | None = None) -> str | None:
+            gemini: dict | None = None, kurtarilan_urun: str | None = None) -> str | None:
     # NOT: indirim <= 0 olan ürünleri de paylaşıyoruz (fiyat odaklı başlık).
     # gemini: Gemini analiz sonucu — varsa akıllı ürün adı + tanıtım kullanılır.
+    # kurtarilan_urun: v23.23 — blok'tan ad çıkmazsa orijinalden kurtarılan ad.
     if negatif_mi(metin):
         return None
     # Ürün adı: Gemini varsa onu kullan (boş slogan kontrolü için)
     # v23.0 — TEK MERKEZİ KAPI'dan geçir (Amazon vb çöp burada elenir)
     # v23.8 — Gemini ile saf-Python KARŞILAŞTIR: Gemini bazen uzun ürün adının
-    # ortasından kopuk parça veriyor ("Apple iPad ... Gümüş Rengi" yerine
-    # "Gün Süren Pil Ömrü Gümüş Rengi Satıcı Amazon Depo"). Mesaj başıyla
-    # örtüşen ad doğrudur.
+    # ortasından kopuk parça veriyor. Mesaj başıyla örtüşen ad doğrudur.
     from services.urun_kapisi import gecerli_urun_adi as _kapi2, en_iyi_urun_adi as _eniyi, guzellestir as _guzel
     _g_urun = (gemini or {}).get("urun_adi")
     if _g_urun:
@@ -444,6 +443,11 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
         _urun = _eniyi(_g_aday, _p_aday, metin) or _p_aday or urun_adi_bul(metin)
     else:
         _urun = urun_adi_bul(metin)
+    # v23.23 — Blok'tan ad çıkmadıysa KURTARILAN adı kullan (KURTARMA ürünleri
+    # eskiden burada düşüyordu: şablon adı blok'tan tekrar çıkaramayıp None
+    # dönüyor, ürün sessizce paylaşılmıyordu). Kurtarılan ad da kapıdan geçer.
+    if not _urun and kurtarilan_urun:
+        _urun = _kapi2(kurtarilan_urun, metin) or kurtarilan_urun
     # v23.9 — Uzun teknik adı okunabilir hale getir
     if _urun:
         _urun = _guzel(_urun)

@@ -569,7 +569,9 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 if marka_spam_kontrol(a["magaza"]):
                     log("BILGI", f"{a['magaza']} spam limiti – atlandı")
                     return
-                sablon = sablon_olustur(a["blok"], a["indirim"], [a["link"]], gemini=a.get("gemini"))
+                sablon = sablon_olustur(a["blok"], a["indirim"], [a["link"]],
+                                        gemini=a.get("gemini"),
+                                        kurtarilan_urun=a.get("urun"))
                 if not sablon:
                     return
                 # v22: Duplicate kontrol — son N gün içinde aynı ürün paylaşıldıysa atla

@@ -1479,7 +1479,7 @@ class TestV236PanelMetrikleri:
         assert sonra == ilk and sonra >= 3, "Kalite restart'ta kayboldu"
 
     def test_panel_uretilir(self):
-        """Panel HTML hatasız üretilmeli."""
+        """Panel HTML hatasız üretilmeli (v23.22 zengin panel)."""
         import os
         os.environ["DATA_DIR"] = "/tmp/test_panel_html"
         os.makedirs("/tmp/test_panel_html", exist_ok=True)
@@ -1487,7 +1487,9 @@ class TestV236PanelMetrikleri:
         from services.health import _panel_html
         html = _panel_html(kuyruk_size=5)
         assert "FırsatPulsu" in html
-        assert "Son 24h" in html
+        assert "Toplam Paylaşım" in html       # yeni: özet bölümü
+        assert "Mağaza Dağılımı" in html        # yeni: detaylı dağılım
+        assert "<!DOCTYPE html>" in html
 
 
 class TestV237CopKuyrukVeKarakutu:
@@ -2079,3 +2081,88 @@ class TestV2321LogVePanel:
         # Her durumda string veya None döner, hata fırlatmaz
         sonuc = log_dosya_yolu()
         assert sonuc is None or isinstance(sonuc, str)
+
+
+class TestV2322ZenginWebPanel:
+    """v23.22 — Railway web paneli (/panel) tüm detaylı istatistiği yansıtır."""
+
+    def test_panel_tum_bolumler(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_wp"
+        os.makedirs("/tmp/test_wp", exist_ok=True)
+        from utils import db; db.init()
+        from services.health import _panel_html
+        html = _panel_html(kuyruk_size=2)
+        for bolum in ["Özet", "Sistem", "Mağaza Dağılımı", "Kategori Dağılımı",
+                      "En Beğenilen", "Etkileşim", "Çalışma Süresi", "Kategori Aboneleri"]:
+            assert bolum in html, f"Panel bölümü eksik: {bolum}"
+
+    def test_panel_magaza_verisi(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_wp2"
+        os.makedirs("/tmp/test_wp2", exist_ok=True)
+        from utils import db; db.init()
+        from utils import cache
+        cache._ist_yaz("magazalar", {"Amazon": 50, "N11": 20})
+        cache._ist_yaz("toplam", 70)
+        from services.health import _panel_html
+        html = _panel_html(0)
+        assert "Amazon" in html and ">50<" in html
+        assert ">70<" in html
+
+    def test_panel_saat_tuple_guvenli(self):
+        """en_iyi_saatler tuple döndürse de panel çökmemeli (regresyon)."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_wp3"
+        os.makedirs("/tmp/test_wp3", exist_ok=True)
+        from utils import db; db.init()
+        from utils import zamanlama
+        zamanlama._ilk_kurulum()
+        # Saat verisi ekle (tuple döndürecek)
+        for _ in range(3):
+            zamanlama.paylasim_kaydet(14)
+            zamanlama.oy_kaydet(14)
+        from services.health import _panel_html
+        html = _panel_html(0)  # çökmemeli
+        assert "<!DOCTYPE html>" in html
+
+
+class TestV2323SahteIndirimVeKurtarma:
+    """v23.23 — Canlı logdan tespit edilen iki kök sebep:
+    1. İndirim oranı uyduran kurallar (aciliyet kelimesi → sahte %50)
+    2. KURTARMA ürünleri şablona iletilmediği için sessizce düşüyordu."""
+
+    def test_aciliyet_kelimesi_sahte_oran_uretmez(self):
+        from services.analiz import indirim_oranini_bul
+        # Aciliyet kelimesi + fiyat var ama GERÇEK indirim yok → %0 olmalı
+        assert indirim_oranini_bul("📦 Pil\n149 TL\nStoklar eriyor!") == 0
+        assert indirim_oranini_bul("📦 ASUS\n8999 TL\nson stok kaçmaz") == 0
+        assert indirim_oranini_bul("📦 Ürün\n500 TL\nhemen yakala dip fiyat") == 0
+
+    def test_magaza_linki_sahte_oran_uretmez(self):
+        from services.analiz import indirim_oranini_bul
+        # Sadece mağaza linki var → indirim uydurMAmalı
+        assert indirim_oranini_bul("📦 Ürün\n500 TL\nhttps://amazon.com.tr/dp/B0X") == 0
+
+    def test_gercek_indirim_korunur(self):
+        """Uydurma kuralları kalktı ama GERÇEK indirim hâlâ bulunmalı."""
+        from services.analiz import indirim_oranini_bul
+        assert indirim_oranini_bul("Matkap %30 indirim 700 TL") == 30
+        assert indirim_oranini_bul("-%45 Bosch") == 45
+
+    def test_kurtarilan_urun_sablon_uretir(self):
+        """Blok'tan ad çıkmasa da kurtarılan adla şablon üretilmeli."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kurt23"
+        os.makedirs("/tmp/test_kurt23", exist_ok=True)
+        from utils import db; db.init()
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        blok = "💰 149 TL\nhttps://amazon.com.tr/dp/B0X"
+        # Kurtarmasız → None (blok'tan ad çıkmaz)
+        assert olustur(blok, 0, ["https://amazon.com.tr/dp/B0X"], gemini=None) is None
+        # Kurtarmalı → şablon üretilir
+        s = olustur(blok, 0, ["https://amazon.com.tr/dp/B0X"], gemini=None,
+                    kurtarilan_urun="GP Batteries GPA76 Düğme Pil")
+        assert s and "FIRSAT" in s

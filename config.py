@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.21-2026.06.01"   # /log komutu (bot logu dosya olarak) + zengin /durum paneli (kalite, tekrar, kategori, saat, tiklama, calisma suresi)
+SURUM = "v23.23-2026.06.01"   # Canli log teshisi: sahte indirim uretimi kaldirildi (aciliyet kelimesi artik %50 uydurmuyor) + KURTARMA urunleri artik paylasiliyor (kurtarilan ad sablona iletiliyor)
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)

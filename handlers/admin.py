@@ -1448,12 +1448,14 @@ async def _zengin_panel(event, kuyruk) -> None:
         except Exception:
             pass
 
-        # En etkili saatler
+        # En etkili saatler (en_iyi_saatler → [(saat, oran, paylasim), ...])
         try:
             from utils import zamanlama
             saatler = zamanlama.en_iyi_saatler(3)
             if saatler:
-                ss = ", ".join(f"{h}:00" for h in saatler)
+                def _sno(x):
+                    return x[0] if isinstance(x, (list, tuple)) else x
+                ss = ", ".join(f"{_sno(h):02d}:00" for h in saatler)
                 s.append(f"⏰ Etkili saatler: {ss}")
         except Exception:
             pass

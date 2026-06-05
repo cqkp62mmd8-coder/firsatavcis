@@ -152,18 +152,15 @@ def indirim_oranini_bul(metin: str) -> int:
             if 1 <= ind <= 99:
                 return max(ind, config.MIN_INDIRIM if kv >= config.KUPON_MIN_TL else 1)
 
-    # 7. Sepette indirim
-    if re.search(r"sepette\s*[\d.,]+\s*tl|sepete\s*\d+\s*adet", ml):
-        return 30
+    # v23.23 — İNDİRİM UYDURAN KURALLAR KALDIRILDI.
+    # Eskiden aciliyet kelimesi ("stoklar eriyor", "kaçmaz") + fiyat varsa
+    # sabit %50, sepette indirim varsa %30, tanınan mağaza linki varsa %20
+    # UYDURULUYORDU. Bu, gerçek indirim olmayan ürünlere sahte oran basıyordu
+    # (canlıda çok sayıda ürün yanlış %50 gösteriyordu). Artık indirim
+    # SADECE metinde açıkça yazılı veya iki fiyattan HESAPLANABİLİR ise verilir.
+    # Oran bulunamazsa 0 döner → şablon "FIRSAT ÜRÜNÜ" başlığı kullanır.
 
-    # 8. Stok uyarısı + fiyat
-    stok_kelime = {"stoklar eriyor", "son stok", "dip fiyat", "en düşük", "kaçmaz", "hemen yakala"}
-    if any(k in ml for k in stok_kelime) and re.search(r"[\d.,]+\s*(?:tl|₺)", ml):
-        return 50
-
-    # 9. Tanınan mağaza linki
-    if any(x in ml for x in ["hb.biz", "trendyol.com", "ty.gl", "amazon.com.tr", "n11.com", "sl.n11.com"]):
-        return 20
+    return 0
 
     return 0
 
