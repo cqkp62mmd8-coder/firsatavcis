@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.24-2026.06.01"   # Port cakismasi cozuldu: tiklama redirect ayri sunucu yerine health sunucusunda (/git/) — Railway tek public port
+SURUM = "v23.26-2026.06.01"   # Kupon sepet fiyati: 'X TL - Y TL Kupon Ile Sepette Z' formati artik sepet fiyatini (gercek odenen) gosteriyor + ikinci urun kacmiyor
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
@@ -170,6 +170,15 @@ KAYNAK_KANALLAR = [
     "@firsatyurdu",
     "@yurtdisifirsat",
 ]
+
+# ── Engellenmiş göndericiler (v23.25) ────────────────────────────
+# Bu kullanıcı adlarından gelen VEYA bu adlardan forward edilen mesajlar
+# tamamen yok sayılır (link/içerik ne olursa olsun). Ayrıca mesaj metni
+# veya linkleri bu adı içeriyorsa da atlanır (örn 'magfi.link').
+# Virgülle ayrılmış env ile genişletilebilir: ENGELLI_GONDERENLER=magfi,xbot
+_engelli_env = os.environ.get("ENGELLI_GONDERENLER", "magfi")
+ENGELLI_GONDERENLER = [x.strip().lstrip("@").lower()
+                       for x in _engelli_env.split(",") if x.strip()]
 
 # ── Kategoriler ──────────────────────────────────────────────────
 # NOT: Kategori listesi artık ML modelinden geliyor (utils/ml_kategoriler.py).

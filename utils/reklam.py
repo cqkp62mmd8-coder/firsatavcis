@@ -55,6 +55,31 @@ def reklam_mi(metin: str, link: str = "", urun_adi: str = "",
     if not metin or len(metin.strip()) < 3:
         return True, "boş/çok kısa"
 
+    ml = metin.lower()
+
+    # ── v23.25 — KESİN REKLAM İŞARETLERİ (fiyat/ürün ne olursa olsun reklam) ──
+    # Bu sinyaller varsa mesaj kesinlikle bir tanıtım/duyurudur; somut ürün
+    # adı veya fiyat görünse bile (reklamlar da fiyat/slogan içerir) engellenir.
+    # Canlıda "Fuzul Topraktan #sponsorlu ... Hemen Başvur" reklamı, sahte bir
+    # ürün adıyla (slogan) ürün sanılıp paylaşılmıştı.
+    _kesin_reklam = [
+        "#sponsorlu", "#sponsor", "#reklam", "#işbirliği", "#isbirligi",
+        "#advertorial", "#tanıtım", "#tanitim", "#ad ", "#ücretlitanıtım",
+        "sponsorlu içerik", "reklam içerir", "iş birliği",
+        # Başvuru/kayıt çağrıları (ürün satışı değil, yönlendirme)
+        "hemen başvur", "hemen basvur", "başvuru yap", "basvuru yap",
+        "hemen kayıt", "üye ol", "uye ol", "kayıt ol", "kayit ol",
+        "randevu al", "ön başvuru", "on basvuru", "teklif al",
+        # Emlak/yatırım reklamı kalıpları
+        "yatırım fırsat", "yatirim firsat", "geleceğinizi planlayın",
+        "geleceginizi planlayin", "yatırım model", "yatirim model",
+        "taksitlerle yatırım", "konut projesi", "lansman fiyat",
+        "fiyatlarıyla yatırım", "kazançlı yatırım",
+    ]
+    for isaret in _kesin_reklam:
+        if isaret in ml:
+            return True, f"kesin reklam işareti: '{isaret.strip()}'"
+
     # ── Somut satış sinyallerini ölç (kelimelere değil, yapıya bak) ──
     fiyat_sinyali = fiyat_var or bool(_FIYAT_RE.search(metin))
     indirim_sinyali = bool(_INDIRIM_RE.search(metin))

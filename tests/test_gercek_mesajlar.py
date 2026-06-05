@@ -2225,3 +2225,74 @@ class TestV2324RedirectPortCakisma:
         sonuc = asyncio.new_event_loop().run_until_complete(
             redirect_sunucu.sunucu_baslat(port=9999))
         assert sonuc is None
+
+
+class TestV2325ReklamVeEngelliGonderici:
+    """v23.25 — Sponsorlu reklam engelleme + @magfi gönderici engelleme."""
+
+    def test_sponsorlu_reklam_engellenir(self):
+        from utils import reklam
+        m = ("Doğru lokasyonda, güvenilir yatırım modeliyle geleceğinizi planlayın!\n"
+             "110.430 TL'den başlayan taksitlerle yatırım fırsatını keşfedin.\n"
+             "🔗 Hemen Başvur\n#sponsorlu · Fuzul Topraktan")
+        r, sebep = reklam.reklam_mi(m, "", "", fiyat_var=True)
+        assert r is True and "kesin reklam" in sebep
+
+    def test_basvuru_cagrisi_reklam(self):
+        from utils import reklam
+        r, _ = reklam.reklam_mi("Hemen başvur, kredi fırsatı!", "", "", fiyat_var=False)
+        assert r is True
+
+    def test_gercek_urun_taksitli_engellenmez(self):
+        """Taksit seçeneği olan GERÇEK ürün reklam sanılmamalı."""
+        from utils import reklam
+        r, _ = reklam.reklam_mi("📦 iPhone 15 128GB\n45.999 TL\n12 taksit imkanı\n🏪 Amazon",
+                                "", "iPhone 15", fiyat_var=True)
+        assert r is False
+
+    def test_hashtag_sponsorlu_engellenir(self):
+        from utils import reklam
+        for etiket in ["#sponsorlu", "#reklam", "#işbirliği"]:
+            r, _ = reklam.reklam_mi(f"Harika ürün 500 TL {etiket}", "", "Ürün", fiyat_var=True)
+            assert r is True, f"{etiket} engellenmedi"
+
+    def test_engelli_gonderici_config(self):
+        import importlib, config
+        importlib.reload(config)
+        assert "magfi" in config.ENGELLI_GONDERENLER
+
+    def test_engelli_icerik_eslesme(self):
+        import config
+        # magfi linki içeren metin engellenmeli (içerik eşleşmesi)
+        dusuk = "📦 ürün https://magfi.link/abc 500 tl".lower()
+        assert any(e in dusuk for e in config.ENGELLI_GONDERENLER)
+
+
+class TestV2326KuponSepetFiyati:
+    """v23.26 — "X TL - Y TL Kupon İle Sepette Z" formatı (Philips).
+    Bug: bot kupon öncesi fiyatı (2.599) gösteriyor, sepet fiyatını (2.399)
+    ve ikinci ürünü (Küvet) kaçırıyordu."""
+
+    def test_sepet_fiyati_kuponla(self):
+        from services.kupon_ayristirici import ayristir
+        m = ("🔥Philips Erkek Bakım Seti 13'lü 1 Arada Saç Sakal Vücut Şekillendirici\n\n"
+             "✅2.599TL - Ürün Altındaki 200TL Kupon İle Sepette 2.399\n"
+             "🔻Dolu Küçük Katlanır Küvet Gri Sepette 540TL - Ücretsiz Kargo")
+        urunler = ayristir(m)
+        assert len(urunler) == 2, f"2 ürün bekleniyordu: {len(urunler)}"
+        # Philips: sepet (ödenen) 2399, eski 2599
+        assert urunler[0]["fiyat"] == 2399.0, f"Sepet fiyatı yanlış: {urunler[0]['fiyat']}"
+        assert urunler[0]["eski_fiyat"] == 2599.0
+        # Küvet: 540, adında "Sepette" kalmamalı
+        assert urunler[1]["fiyat"] == 540.0
+        assert "Sepette" not in urunler[1]["urun"] and "Küvet" in urunler[1]["urun"]
+
+    def test_kupon_degeri_sepet_fiyatina_karismaz(self):
+        """200TL kupon değeri eski fiyat sanılmamalı."""
+        from services.kupon_ayristirici import ayristir
+        m = ("🔥Ürün A\n✅1.000TL - 100TL Kupon İle Sepette 900")
+        urunler = ayristir(m)
+        assert urunler and urunler[0]["fiyat"] == 900.0
+        # eski fiyat 1000 olmalı (100 kupon değeri DEĞİL)
+        assert urunler[0]["eski_fiyat"] in (1000.0, None)
+        assert urunler[0]["eski_fiyat"] != 100.0

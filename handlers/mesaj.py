@@ -175,6 +175,28 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
         urun = urun_adi_bul(blok)
 
     # ── REKLAM KARARI: Gemini varsa onun anlayışı (gerçek anlama), yoksa yedek ──
+    # v23.25 — ÖNCE Gemini'den BAĞIMSIZ kesin reklam kontrolü. Açık işaretler
+    # (#sponsorlu, "Hemen Başvur", "yatırım fırsatı") varsa Gemini "ürün" dese
+    # bile engelle. Tek katmana güvenmek riskli: canlıda sponsorlu emlak
+    # reklamı sahte ürün adıyla (slogan) Gemini'yi geçip paylaşılmıştı.
+    try:
+        from utils import reklam as _reklam_on
+        _kesin, _kesin_sebep = _reklam_on.reklam_mi(
+            blok, link=lnk, urun_adi="", fiyat_var=bool(_yeni_fiyat))
+        # Sadece "kesin reklam işareti" ile düşür (yapısal karar değil — o
+        # aşağıda Gemini yoksa devreye girer). Böylece Gemini'nin ürün kararı
+        # korunur AMA açık reklam etiketleri her durumda engellenir.
+        if _kesin and _kesin_sebep.startswith("kesin reklam işareti"):
+            log("FILTRE", f"Reklam (kesin işaret) → atlandı: '{onizleme}…' ({_kesin_sebep})")
+            try:
+                from utils import urun_taniyici
+                urun_taniyici.ogren_negatif(blok[:200])
+            except Exception:
+                pass
+            return None
+    except Exception:
+        pass
+
     if gemini_sonuc is not None:
         if gemini_sonuc.get("reklam"):
             log("FILTRE", f"Reklam (Gemini) → atlandı: '{onizleme}…'")
@@ -402,6 +424,42 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
                 pass
 
             ham = markdown_temizle(event.message.text or "")
+
+            # ── v23.25 — ENGELLENMİŞ GÖNDERİCİ KONTROLÜ ──────────────
+            # @magfi gibi belirli botların mesajları tamamen yok sayılır.
+            # Üç yoldan kontrol: gönderen kullanıcı adı, forward kaynağı,
+            # ve metin/link içeriği (örn 'magfi.link').
+            try:
+                _engelliler = getattr(config, "ENGELLI_GONDERENLER", [])
+                if _engelliler:
+                    _adaylar = []
+                    # Gönderen kullanıcı adı
+                    try:
+                        _snd = await event.get_sender()
+                        if _snd is not None and getattr(_snd, "username", None):
+                            _adaylar.append(_snd.username.lower())
+                    except Exception:
+                        pass
+                    # Forward kaynağı (forward edilmiş mesaj)
+                    try:
+                        _fwd = getattr(event.message, "forward", None)
+                        if _fwd is not None:
+                            _fc = getattr(_fwd, "chat", None) or getattr(_fwd, "sender", None)
+                            if _fc is not None and getattr(_fc, "username", None):
+                                _adaylar.append(_fc.username.lower())
+                    except Exception:
+                        pass
+                    # Kullanıcı adı eşleşmesi
+                    if any(e in _adaylar for e in _engelliler):
+                        log("FILTRE", f"Engelli gönderici → atlandı ({_adaylar})")
+                        return
+                    # Metin/link içeriği eşleşmesi (örn 'magfi' linki)
+                    _dusuk = ham.lower()
+                    if any(e in _dusuk for e in _engelliler):
+                        log("FILTRE", "Engelli gönderici içeriği → atlandı")
+                        return
+            except Exception:
+                pass
 
             # Buton linklerini topla — birkaç farklı yoldan dene
             btn_links: list[str] = []

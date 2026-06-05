@@ -28,6 +28,11 @@ _DUSTU = re.compile(r"([\d.,]+)\s*TL['\u2019]?\s*ye\s+[Dd]üş", re.I)
 _PIYASA = re.compile(r"(?:[Pp]iyasası|[Nn]ormal(?:i)?|[Ee]ski)\s+(?:[Ff]iyat[ıi]?\s+)?([\d.,]+)\s*TL", re.I)
 # "X/Y TL" indirim açıklaması → bu bir FİYAT DEĞİL (kupon mekaniği)
 _INDIRIM_ACIK = re.compile(r"\d+\s*/\s*\d+\s*TL")
+# v23.26 — "Sepette Z" / "Sepette Z TL" → SEPET (gerçek ödenen) fiyatı.
+# "2.599TL ... 200TL Kupon İle Sepette 2.399" → ödenen = 2.399, eski = 2.599
+_SEPETTE = re.compile(r"[Ss]epette\s+([\d.,]+)\s*(?:TL)?", re.I)
+# v23.26 — "200TL Kupon İle" → kupon DEĞERİ (kod değil, indirim miktarı)
+_KUPON_DEGER = re.compile(r"([\d.,]+)\s*TL\s*[Kk]upon", re.I)
 # Ürün başlığı işareti (🔥🔻 ile başlayan satır = yeni ürün)
 _BASLIK = re.compile(r"^[🔥🔻🆕⚡🎯]")
 
@@ -55,13 +60,17 @@ def _fiyat_to_float(s: str) -> float | None:
 
 def kupon_mesaji_mi(metin: str) -> bool:
     """Bu mesaj kupon/çoklu-fırsat formatında mı?
-    (kod+'Kodu İle' VEYA 'X TL'ye Düştü' kalıbı)"""
+    (kod+'Kodu İle' VEYA 'X TL'ye Düştü' VEYA 'Sepette/Kupon İle' kalıbı)"""
     if not metin:
         return False
     if _KOD.search(metin) and _INDIRIMLI.search(metin):
         return True
     # v23.20 — "X TL'ye Düştü - Piyasası Y TL" formatı (kodsuz, Güral)
     if _DUSTU.search(metin) and _PIYASA.search(metin):
+        return True
+    # v23.26 — "Sepette Z" sepet fiyatı + ürün başlığı (Philips kupon formatı):
+    #   "🔥Ürün \n ✅X TL ... 200TL Kupon İle Sepette Z \n 🔻Ürün2 Sepette W TL"
+    if _SEPETTE.search(metin) and (_BASLIK.search(metin) or _KUPON_DEGER.search(metin)):
         return True
     return False
 
@@ -96,6 +105,25 @@ def ayristir(metin: str) -> list[dict]:
         indirimli = _INDIRIMLI.search(temiz_satir) or _DUSTU.search(temiz_satir)
         fiyat = _fiyat_to_float(indirimli.group(1)) if indirimli else None
 
+        # v23.26 — "Sepette Z" → sepet (gerçek ödenen) fiyatı. Kupon sonrası
+        # fiyat budur. Örn "2.599TL ... 200TL Kupon İle Sepette 2.399" → 2.399.
+        sepet_eski = None
+        if not fiyat:
+            sepet_m = _SEPETTE.search(temiz_satir)
+            if sepet_m:
+                sepet_fiyat = _fiyat_to_float(sepet_m.group(1))
+                if sepet_fiyat and sepet_fiyat >= 10:
+                    fiyat = sepet_fiyat
+                    # Sepetten ÖNCE geçen, ondan BÜYÜK ilk TL fiyatı = eski fiyat
+                    on_kisim = temiz_satir[:sepet_m.start()]
+                    for m2 in re.finditer(r"([\d.,]+)\s*TL", on_kisim):
+                        v = _fiyat_to_float(m2.group(1))
+                        # Kupon değerini (200TL Kupon) eski fiyat sanma
+                        if v and v > sepet_fiyat and not _KUPON_DEGER.search(
+                                on_kisim[max(0, m2.start()-2):m2.end()+8]):
+                            sepet_eski = v
+                            break
+
         # Başlık satırında inline fiyat olabilir (🔻Flormar ... 99TL) — onu da dene
         if not fiyat and baslik_mi:
             inline = re.search(r"([\d.,]+)\s*TL", temiz_satir)
@@ -116,6 +144,9 @@ def ayristir(metin: str) -> list[dict]:
 
         piyasa_m = _PIYASA.search(temiz_satir)
         eski = _fiyat_to_float(piyasa_m.group(1)) if piyasa_m else None
+        # v23.26 — Piyasa fiyatı yoksa sepet-öncesi fiyatı eski fiyat say
+        if eski is None and sepet_eski:
+            eski = sepet_eski
 
         # Ürün adını belirle (öncelik sırası):
         satir_urun = None
@@ -125,10 +156,14 @@ def ayristir(metin: str) -> list[dict]:
             if len(on.split()) >= 2 and not _INDIRIMLI.search(on):
                 satir_urun = on
         elif baslik_mi:
-            # Aynı satırda başlık+fiyat (Flormar): fiyat/TL kısmını at, adı al
+            # Aynı satırda başlık+fiyat (Flormar / Küvet): fiyat, TL, "Sepette",
+            # "Düştü" gibi kuyrukları at, sadece ürün adını bırak.
             on = _baslik_temizle(satir)
+            # "Sepette ..." ve sonrasını kes (sepet fiyatı ürün adına bulaşmasın)
+            on = re.split(r"\s*[Ss]epette\b", on)[0].strip()
             on = re.sub(r"\s*[\d.,]+\s*TL.*$", "", on, flags=re.I).strip()
             on = _DUSTU.sub("", on).strip()
+            on = on.rstrip(" -–—·").strip()
             if len(on.split()) >= 2:
                 satir_urun = on
 
