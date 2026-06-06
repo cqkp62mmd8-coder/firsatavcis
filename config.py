@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.29-2026.06.01"   # '#isbirligi' kesin reklam listesinden CIKARILDI (affiliate bildirimi, cogu urunde var; gercek urunleri eliyordu). #sponsorlu/#reklam + basvuru/yatirim kaliplari reklam isareti olarak kalir
+SURUM = "v23.30-2026.06.01"   # 'Alisveris firsati'/'Alisveris' sahte urun adi kaldirildi: 'alisveris' jenerik kategori kelimesi olarak eklendi (Gemini'nin urettigi jenerik ad kapidan geciyordu)
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)

@@ -2430,3 +2430,49 @@ class TestV2328TurkceIveAdsizUrun:
                     ["https://amazon.com.tr/dp/B0X"], gemini=None,
                     kurtarilan_urun="GP Batteries GPA76 Düğme Pil")
         assert s and "GP Batteries" in s
+
+
+class TestV2330AlisverisFirsatiSahteAd:
+    """v23.30 — 'Alışveriş fırsatı' / 'Alışveriş' sahte ürün adı kaldırıldı.
+    Kök sebep: 'alışveriş' jenerik listede değildi, kapı Gemini'nin ürettiği
+    'Alışveriş fırsatı'yı geçerli ad sayıp 'Alışveriş'e buduyordu."""
+
+    def test_alisveris_firsati_elenir(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for ad in ["Alışveriş fırsatı", "Alışveriş Fırsatı", "alışveriş fırsatı",
+                   "Alışveriş", "alisveris firsati"]:
+            assert gecerli_urun_adi(ad, "x") is None, f"'{ad}' elenmedi"
+
+    def test_gercek_urun_korunur(self):
+        from services.urun_kapisi import gecerli_urun_adi
+        for ad in ["Penti Kadın Dantelli Kısa Çorap", "Bosch GSR 12V Matkap",
+                   "Omo Kapsül Deterjan"]:
+            assert gecerli_urun_adi(ad, "x"), f"'{ad}' yanlışlıkla elendi"
+
+    def test_gemini_alisveris_firsati_dondurse_gercek_ad_kullanilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_af30"
+        os.makedirs("/tmp/test_af30", exist_ok=True)
+        from utils import db; db.init()
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        gem = {"urun_adi": "Alışveriş fırsatı", "kategori": "giyim", "reklam": False,
+               "tanitim": "", "kalite": 3, "fiyat": 210, "eski_fiyat": 504}
+        s = olustur("📦 Penti Kadın Dantelli Kısa Çorap\n₺210,00\n💰 Normal: ₺504,93",
+                    58, ["https://amazon.com.tr/dp/B0X"], gemini=gem)
+        assert s and "Penti" in s and "Alışveriş fırsatı" not in s
+
+    def test_adsiz_gemini_alisveris_firsati_none(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_af30b"
+        os.makedirs("/tmp/test_af30b", exist_ok=True)
+        from utils import db; db.init()
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        gem = {"urun_adi": "Alışveriş fırsatı", "kategori": "genel", "reklam": False,
+               "tanitim": "", "kalite": 3, "fiyat": 210, "eski_fiyat": 504}
+        s = olustur("İndirimli: ₺210\nNormal: ₺504\n-%58", 58,
+                    ["https://amazon.com.tr/dp/B0X"], gemini=gem)
+        assert s is None or "Alışveriş fırsatı" not in s

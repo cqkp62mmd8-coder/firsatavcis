@@ -47,6 +47,7 @@ _JENERIK = {
     "tüm", "tum", "seçili", "secili", "çeşitli", "binlerce",
     # Kategori adları (tek başına ürün değil)
     "elektronik", "giyim", "ev", "kozmetik", "spor", "kitap", "oyuncak",
+    "alışveriş", "alisveris",  # v23.30 — "Alışveriş fırsatı"/"Alışveriş" sahte adı
     "mobilya", "bahçe", "otomotiv", "market", "bilgisayar", "telefon",
     "aksesuar", "moda", "anne", "bebek", "yapı", "gıda", "gida",
     # Bağlaçlar / dolgu
