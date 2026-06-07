@@ -66,7 +66,7 @@ def _kupon_adaylar_olustur(kupon_urunler: list[dict], btn_links: list[str],
     from services.analiz import kategori_bul
     from services.urun_kapisi import gecerli_urun_adi, guzellestir
     adaylar = []
-    for u in kupon_urunler:
+    for i, u in enumerate(kupon_urunler):
         ad = gecerli_urun_adi(u.get("urun"), ham)
         if not ad:
             continue
@@ -100,7 +100,12 @@ def _kupon_adaylar_olustur(kupon_urunler: list[dict], btn_links: list[str],
         adaylar.append({
             "blok": blok_metin,
             "indirim": indirim,
-            "link": btn_links[0] if btn_links else "",
+            # v23.34 — Her ürüne KENDİ linkini ver (sıralı: 🔥→link0, 🔻→link1).
+            # Eskiden TÜM ürünler btn_links[0] alıyordu → aynı link → aşağıdaki
+            # duplicate filtresi 2. ve sonraki ürünleri "aynı link" diye
+            # düşürüyordu, çoklu kupon ürünü kayboluyordu. Ürün sayısı link
+            # sayısını aşarsa fazlalar son linke düşer (dedup eler, güvenli).
+            "link": (btn_links[min(i, len(btn_links) - 1)] if btn_links else ""),
             "magaza": "E-Ticaret",
             "kat": kat,
             "skor": 50,

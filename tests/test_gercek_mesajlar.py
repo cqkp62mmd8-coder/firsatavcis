@@ -2617,3 +2617,51 @@ class TestV2333KaliteSkoruKayit:
         s = olustur("📦 Stanley Termos\n899 TL ~~1.499 TL~~", 40,
                     ["https://amazon.com.tr/dp/B073SNMY1W"], gemini=None)
         assert s is not None
+
+
+class TestV2334KuponCokluLink:
+    """v23.34 — Çoklu kupon ürününe (🔥/🔻) her birine KENDİ linki verilir.
+    Eskiden hepsi btn_links[0] alıyordu → aynı link → duplicate filtresi 2.+
+    ürünü düşürüyordu (Valkyrie+Kretuar mesajında sadece ilki paylaşılıyordu)."""
+
+    def _adaylar(self, mesaj, links):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kup34"
+        os.makedirs("/tmp/test_kup34", exist_ok=True)
+        from utils import db; db.init()
+        from services.kupon_ayristirici import ayristir
+        from handlers.mesaj import _kupon_adaylar_olustur
+        return _kupon_adaylar_olustur(ayristir(mesaj), links, mesaj)
+
+    def _dedup(self, adaylar):
+        benzersiz, gorulen = [], set()
+        for a in adaylar:
+            if a["link"] in gorulen:
+                continue
+            gorulen.add(a["link"]); benzersiz.append(a)
+        return benzersiz
+
+    VALKYRIE = ("🔥Valkyrie 300W 48V Şarjlı Yüksek Basınçlı Oto Yıkama Tabancası\n"
+                "✅1.103TL'ye Düştü - Piyasası 1.683TL+ / Kargo Ücretsiz\n"
+                "🔻Kretuar Maket Bıçak Seti 13 Parçalı Çelik 199TL - Prime Üyelik Kargo Ücretsiz")
+
+    def test_iki_urun_farkli_link_alir(self):
+        links = ["https://sl.n11.com/n/valkyrie", "https://www.amazon.com.tr/dp/B0XKRETUAR"]
+        adaylar = self._adaylar(self.VALKYRIE, links)
+        assert len(adaylar) == 2
+        # Farklı linkler
+        assert adaylar[0]["link"] != adaylar[1]["link"]
+        assert adaylar[0]["link"].endswith("valkyrie")
+        assert adaylar[1]["link"].endswith("KRETUAR")
+
+    def test_dedup_iki_urunu_de_korur(self):
+        links = ["https://sl.n11.com/n/valkyrie", "https://www.amazon.com.tr/dp/B0XKRETUAR"]
+        benzersiz = self._dedup(self._adaylar(self.VALKYRIE, links))
+        assert len(benzersiz) == 2, "duplicate filtresi bir ürünü düşürdü"
+        adlar = " ".join(a["urun"] for a in benzersiz)
+        assert "Valkyrie" in adlar and "Kretuar" in adlar
+
+    def test_tek_link_guvenli(self):
+        """Tek link varsa: ilk ürün paylaşılır, ikincisi aynı linke düşüp dedup'ta elenir."""
+        benzersiz = self._dedup(self._adaylar(self.VALKYRIE, ["https://sl.n11.com/n/tek"]))
+        assert len(benzersiz) == 1
