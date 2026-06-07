@@ -156,6 +156,14 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
             log("FILTRE", f"  Mevcut buton linkleri ({len(btn_links)}): {btn_links}")
         return None
 
+    # ── v23.32 — KİTAP FİLTRESİ ──────────────────────────────────
+    # Amazon'da kitaplar ASIN olarak ISBN kullanır (rakamla başlayan 10 hane
+    # veya 9 hane + X); diğer ürünlerin ASIN'i "B" ile başlar. Kitaplar
+    # çoğunlukla indirimde olsa da kanalı tek tipleştirdiği için paylaşılmaz.
+    if getattr(config, "KITAP_FILTRELE", True) and _kitap_linki_mi(lnk, btn_links):
+        log("FILTRE", f"Kitap → atlandı: '{onizleme}…'")
+        return None
+
     from services.analiz import fiyat_bul, urun_adi_bul, _urun_adi_makul
     _eski_fiyat, _yeni_fiyat, _, _ = fiyat_bul(blok)
 
@@ -405,51 +413,95 @@ def _blok_analiz(blok: str, btn_links: list[str], gemini_sonuc: dict | None = No
 
 
 def _coklu_link_satir_ayir(blok: str, linkler: list, orijinal_mesaj: str) -> list | None:
-    """v23.27 — Tek blokta N farklı ürün linki varken bloğu satır-bazlı ayır.
+    """v23.31 — Tek blokta N farklı ürün linki varken bloğu ürün SEGMENTLERİNE ayır.
 
-    Her anlamlı satırı bağımsız analiz eder. SADECE geçerli ürün sayısı link
-    sayısına TAM eşitse sonuç döndürür (her ürün → kendi linki, sırayla).
+    Fiyat içeren satırı SINIR kabul eder: bir ürün = ad satır(lar)ı + onu kapatan
+    fiyat satırı. Böylece "Ürün Adı\\n💰199 TL" gibi ÇOK SATIRLI biçimleri de
+    yakalar (eski sürüm adı+fiyatı AYNI satırda arıyordu, n11/Amazon toplu fırsat
+    mesajlarında ad ve fiyat ayrı satırlarda olduğu için başarısız oluyordu).
+
+    SADECE fiyat-çapalı segment sayısı link sayısına TAM eşitse ve her segment
+    geçerli ürün üretirse sonuç döndürür (her ürün → kendi linki, sırayla).
     Aksi halde None → çağıran güvenli davranışı (yalnız ilk ürün) korur.
-
-    Bu sıkı koşul yanlış isimli/yanlış linkli gönderi üretmeyi önler.
+    Yanlış isimli/linkli gönderi üretmemek için bu sıkı koşul korunur.
     """
     if not blok or not linkler or len(linkler) < 2:
         return None
-    satirlar = [s.strip() for s in blok.split("\n") if s.strip()]
-    if len(satirlar) < 2:
-        return None
-
-    # Önce hangi satırların geçerli ürün adı + fiyat içerdiğini bul (linksiz tarama).
-    # _blok_analiz link olmadan satırı düşürdüğü için, ÖN ELEME ayrı yapılır:
-    # gecerli ürün adı + fiyat olan satırları topla.
-    from services.urun_kapisi import gecerli_urun_adi
     from services.analiz import fiyat_bul
-    gecerli_satirlar = []
-    for s in satirlar:
-        ad = gecerli_urun_adi(s, s)
-        _, ys, _, _ = fiyat_bul(s)
-        if ad and ys:
-            gecerli_satirlar.append(s)
+    from services.urun_kapisi import gecerli_urun_adi
 
-    # Güvenlik: ürün satırı sayısı link sayısıyla TAM eşleşmeli
-    if len(gecerli_satirlar) != len(linkler):
+    # v23.31 — Baştaki BAŞLIK/slogan satırlarını at ("🔥 Günün Fırsatları 🔥").
+    # Bunlar ilk ürün segmentine karışıp ürün adı olarak seçilebiliyordu.
+    # Fiyatı olmayan + geçerli ürün adı olmayan + link içermeyen ÖNCÜ satırları
+    # ilk gerçek içeriğe kadar temizle.
+    _satirlar = blok.split("\n")
+    while _satirlar:
+        ilk = _satirlar[0].strip()
+        if not ilk:
+            _satirlar.pop(0); continue
+        _, _ys, _, _ = fiyat_bul(ilk)
+        if _ys is None and gecerli_urun_adi(ilk, ilk) is None and "http" not in ilk.lower():
+            _satirlar.pop(0)  # başlık/slogan/emoji satırı → at
+        else:
+            break
+    blok = "\n".join(_satirlar)
+
+    # Satırları, fiyat içeren satırı SINIR kabul ederek ürün segmentlerine grupla
+    segmentler: list[str] = []
+    mevcut: list[str] = []
+    for ham_satir in blok.split("\n"):
+        s = ham_satir.strip()
+        if not s:
+            continue
+        mevcut.append(s)
+        _, ys, _, _ = fiyat_bul(s)
+        if ys:  # fiyat satırı → mevcut segmenti kapat (ad satırları + fiyat)
+            segmentler.append("\n".join(mevcut))
+            mevcut = []
+    # Sondaki fiyatsız artık satırlar bir ürün oluşturmaz → yok say
+
+    # Güvenlik: segment sayısı link sayısıyla TAM eşleşmeli (sıralı eşleme güvenli)
+    if len(segmentler) != len(linkler):
+        log("BILGI", f"Çoklu link: segment-link eşleşmedi "
+                      f"({len(segmentler)} segment / {len(linkler)} link) → güvenli mod")
         return None
 
-    # Her satırı KENDİ linkiyle analiz et (link olmadan _blok_analiz düşürür)
-    aday_satirlar = []
-    for s, lnk in zip(gecerli_satirlar, linkler):
+    # Her segmenti KENDİ linkiyle analiz et (tüm kalite/reklam/kategori mantığı)
+    adaylar = []
+    for seg, lnk in zip(segmentler, linkler):
         try:
-            a = _blok_analiz(s, [lnk], gemini_sonuc=None, orijinal_mesaj=orijinal_mesaj)
+            a = _blok_analiz(seg, [lnk], gemini_sonuc=None, orijinal_mesaj=orijinal_mesaj)
         except Exception:
             a = None
         if a and a.get("urun"):
             a["link"] = lnk
-            aday_satirlar.append(a)
+            adaylar.append(a)
 
     # Hepsi geçerli ürün üretmeli; biri bile düşerse güvenli davran
-    if len(aday_satirlar) != len(linkler):
+    if len(adaylar) != len(linkler):
+        log("BILGI", f"Çoklu link: {len(adaylar)}/{len(linkler)} segment geçerli "
+                      "ürün verdi → güvenli mod")
         return None
-    return aday_satirlar
+    return adaylar
+
+
+def _kitap_linki_mi(link: str, btn_links: list | None = None) -> bool:
+    """v23.32 — Amazon kitap linki mi? Kitaplar ASIN olarak ISBN-10 kullanır:
+    10 rakam VEYA 9 rakam + X (örn 9750854586, 080485277X). Diğer ürünlerin
+    ASIN'i 'B' ile başlar (örn B0F3JPLZ53). Yalnızca Amazon için geçerli;
+    güvenilir ve yanlış pozitif vermez.
+    """
+    import re as _re
+    adaylar = list(btn_links or [])
+    if link:
+        adaylar.append(link)
+    for u in adaylar:
+        if not u or "amazon." not in u.lower():
+            continue
+        m = _re.search(r"/(?:dp|gp/product|d)/(\d{9}[\dXx])(?:[/?]|$)", u)
+        if m:
+            return True
+    return False
 
 
 def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:

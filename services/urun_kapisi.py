@@ -62,6 +62,11 @@ _JENERIK = {
     "eriyor", "tükeniyor", "tukeniyor", "bitiyor", "acele", "fırsatı",
     "firsati", "firsat", "duyuru", "müjde", "mujde", "indi", "düştü",
     "dustu", "yakala", "başvur", "basvur", "kazan", "katıl", "katil",
+    # v23.31 — Toplu mesaj BAŞLIK kelimeleri (ürün adı değil, liste başlığı):
+    # "Günün Fırsatları", "Haftanın İndirimleri", "Süper Fırsatlar" vb.
+    "fırsatlar", "fırsatları", "firsatlar", "firsatlari", "günün", "gunun",
+    "bugünün", "bugunun", "haftanın", "haftanin", "indirimler", "indirimleri",
+    "seçtiklerimiz", "sectiklerimiz", "öne", "one", "çıkan", "cikan",
 }
 
 # Ürün-benzeri jenerik kelimeler — tek başına yetmez ama varsa zayıf sinyal

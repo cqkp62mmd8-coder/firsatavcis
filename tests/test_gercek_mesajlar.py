@@ -2476,3 +2476,144 @@ class TestV2330AlisverisFirsatiSahteAd:
         s = olustur("İndirimli: ₺210\nNormal: ₺504\n-%58", 58,
                     ["https://amazon.com.tr/dp/B0X"], gemini=gem)
         assert s is None or "Alışveriş fırsatı" not in s
+
+
+class TestV2331CokluUrunSegment:
+    """v23.31 — Toplu link mesajlarını fiyat-çapalı SEGMENT'lere ayırma.
+    Eski sürüm ad+fiyatı aynı satırda arıyordu; n11/Amazon mesajlarında ad bir
+    satırda, fiyat alt satırda olduğu için ayrılamıyor, ürünler kayboluyordu."""
+
+    L3 = ["https://sl.n11.com/n/a", "https://sl.n11.com/n/b", "https://sl.n11.com/n/c"]
+
+    def _ayir(self, blok, links=None):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_seg31"
+        os.makedirs("/tmp/test_seg31", exist_ok=True)
+        from utils import db; db.init()
+        from handlers.mesaj import _coklu_link_satir_ayir
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        return _coklu_link_satir_ayir(blok, links or self.L3, blok)
+
+    def test_ad_alt_satir_fiyat_ayrilir(self):
+        """Ad bir satırda, fiyat alt satırda (n11 tipik)."""
+        blok = ("Bosch GSR 12V Profesyonel Matkap\n💰 1.299 TL\n\n"
+                "Logitech M171 Kablosuz Mouse\n💰 299 TL\n\n"
+                "HyperX Cloud II Oyuncu Kulaklığı\n💰 1.599 TL")
+        r = self._ayir(blok)
+        assert r and len(r) == 3
+        assert "Bosch" in r[0]["urun"] and "Logitech" in r[1]["urun"]
+        assert r[0]["link"].endswith("/a") and r[2]["link"].endswith("/c")
+
+    def test_baslik_satiri_atilir(self):
+        """Baştaki 'Günün Fırsatları' başlığı ürün adı sanılmamalı."""
+        blok = ("🔥 Günün Fırsatları 🔥\n\nApple AirPods Pro 2. Nesil\n2.999 TL\n\n"
+                "Samsung Galaxy Buds 3\n1.499 TL\n\nAnker Soundcore Q30\n899 TL")
+        r = self._ayir(blok)
+        assert r and len(r) == 3
+        assert "AirPods" in r[0]["urun"]
+        assert all("Fırsatları" not in x["urun"] for x in r)
+
+    def test_eski_yeni_ayni_satir(self):
+        blok = ("Philips Airfryer XL\n2.499 TL ~~3.999 TL~~\n"
+                "Tefal Tava Seti\n1.299 TL ~~1.899 TL~~\n"
+                "Karaca Çaydanlık\n749 TL ~~1.099 TL~~")
+        r = self._ayir(blok)
+        assert r and len(r) == 3
+
+    def test_sayi_eslesmezse_guvenli_none(self):
+        """Segment sayısı link sayısıyla tutmuyorsa None (güvenli)."""
+        r = self._ayir("Bosch Matkap\n199 TL\nLogitech Mouse\n299 TL")  # 2 ürün, 3 link
+        assert r is None
+
+    def test_slogan_only_none(self):
+        r = self._ayir("🔥 SÜPER FIRSATLAR 🔥\nKaçırma!")
+        assert r is None
+
+
+class TestV2332KitapFiltresi:
+    """v23.32 — Amazon kitap linkleri (ISBN-10 ASIN) paylaşımdan çıkarıldı.
+    Kitap = 10 rakam veya 9 rakam+X ASIN; ürün ASIN'i 'B' ile başlar."""
+
+    def test_kitap_linki_tespit(self):
+        from handlers.mesaj import _kitap_linki_mi
+        for u in ["https://www.amazon.com.tr/dp/9750854586?tag=x",
+                  "https://amazon.com.tr/dp/080485277X",
+                  "https://www.amazon.com.tr/dp/0349416729"]:
+            assert _kitap_linki_mi(u) is True, f"kitap kaçtı: {u}"
+
+    def test_urun_linki_kitap_degil(self):
+        from handlers.mesaj import _kitap_linki_mi
+        for u in ["https://www.amazon.com.tr/dp/B0F3JPLZ53?tag=x",
+                  "https://sl.n11.com/n/vlKXCKk",
+                  "https://www.trendyol.com/x-p-12345"]:
+            assert _kitap_linki_mi(u) is False, f"ürün yanlışlıkla kitap: {u}"
+
+    def test_kitap_mesaji_filtrelenir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kt32"
+        os.makedirs("/tmp/test_kt32", exist_ok=True)
+        from utils import db; db.init()
+        import config
+        config.KITAP_FILTRELE = True
+        from handlers.mesaj import _blok_analiz
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        kitap = "📚 Dar Kapı\n💰 89 TL ~~199 TL~~\n🏪 Amazon"
+        s = _blok_analiz(kitap, ["https://www.amazon.com.tr/dp/9750854586?tag=x"],
+                         gemini_sonuc=None, orijinal_mesaj=kitap)
+        assert s is None
+
+    def test_gercek_urun_filtrelenmez(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kt32b"
+        os.makedirs("/tmp/test_kt32b", exist_ok=True)
+        from utils import db; db.init()
+        import config
+        config.KITAP_FILTRELE = True
+        from handlers.mesaj import _blok_analiz
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        urun = "📦 Bosch GSR 12V Matkap\n💰 1.299 TL ~~2.499 TL~~\n🏪 Amazon"
+        s = _blok_analiz(urun, ["https://www.amazon.com.tr/dp/B0F3JPLZ53?tag=x"],
+                         gemini_sonuc=None, orijinal_mesaj=urun)
+        assert s and s.get("urun") and "Bosch" in s["urun"]
+
+
+class TestV2333KaliteSkoruKayit:
+    """v23.33 — Kalite skoru eşikten BAĞIMSIZ her zaman hesaplanır+kaydedilir.
+    Eskiden KALITE_PUAN_ESIK=0 (varsayılan) iken skor hiç hesaplanmıyor, karne
+    boş kalıyordu (/karne 'çalışmıyor' görünüyordu). Filtreleme yalnızca esik>0."""
+
+    def test_esik_sifirda_skor_kaydedilir(self):
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kal33"
+        os.makedirs("/tmp/test_kal33", exist_ok=True)
+        import config
+        config.KALITE_PUAN_ESIK = 0
+        from utils import db; db.init()
+        from services.sablon import olustur
+        from utils import kalite
+        import services.analiz as a
+        bas = kalite.istatistik()["toplam"]
+        a._mesaj_cache.clear()
+        olustur("📦 Bosch GSR 12V Matkap\n1.299 TL ~~2.499 TL~~", 48,
+                ["https://amazon.com.tr/dp/B0F3JPLZ53"], gemini=None)
+        son = kalite.istatistik()["toplam"]
+        assert son == bas + 1, "esik=0'da skor kaydedilmedi"
+
+    def test_esik_sifirda_filtreleme_kapali(self):
+        """esik=0 iken hiçbir ürün kalite yüzünden düşmemeli."""
+        import os
+        os.environ["DATA_DIR"] = "/tmp/test_kal33b"
+        os.makedirs("/tmp/test_kal33b", exist_ok=True)
+        import config
+        config.KALITE_PUAN_ESIK = 0
+        from utils import db; db.init()
+        from services.sablon import olustur
+        import services.analiz as a
+        a._mesaj_cache.clear()
+        # Düşük kaliteli olsa bile esik=0 → paylaşılır (None dönmez)
+        s = olustur("📦 Stanley Termos\n899 TL ~~1.499 TL~~", 40,
+                    ["https://amazon.com.tr/dp/B073SNMY1W"], gemini=None)
+        assert s is not None

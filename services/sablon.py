@@ -543,18 +543,22 @@ def olustur(metin: str, indirim: int, buton_linkleri: list[str] | None = None,
     # v22.9 — Sistem 2: Kalite puanı kapısı. Düşük puanlı paylaşımları ele.
     try:
         import config as _cfg
-        if getattr(_cfg, "KALITE_PUAN_ESIK", 0) > 0:
-            from utils import kalite
-            from services.analiz import kategori_bul_tam, fiyat_bul
-            ana_k, _, guven = kategori_bul_tam(_urun or metin)
-            eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
-            gecer = kalite.degerlendir(
-                _urun, ana_k, guven, indirim, eski_v, yeni_v,
-                gorsel_var=True,   # şablon aşamasında varsayılan
-                link=lnk, esik=_cfg.KALITE_PUAN_ESIK,
-            )
-            if not gecer:
-                return None
+        from utils import kalite
+        from services.analiz import kategori_bul_tam, fiyat_bul
+        _esik = getattr(_cfg, "KALITE_PUAN_ESIK", 0)
+        ana_k, _, guven = kategori_bul_tam(_urun or metin)
+        eski_s, yeni_s, eski_v, yeni_v = fiyat_bul(metin)
+        # v23.33 — Skoru HER ZAMAN hesapla + karneye KAYDET (kalite skoru çalışsın,
+        # /karne dolsun). Eskiden yalnızca esik>0 iken çalışıyordu; esik=0 (varsayılan)
+        # olduğu için skor HİÇ hesaplanmıyor, karne boş kalıyordu. FİLTRELEME ise
+        # yalnızca esik>0 ise yapılır → varsayılan filtreleme davranışı DEĞİŞMEZ.
+        gecer = kalite.degerlendir(
+            _urun, ana_k, guven, indirim, eski_v, yeni_v,
+            gorsel_var=True,   # şablon aşamasında varsayılan
+            link=lnk, esik=_esik,
+        )
+        if _esik > 0 and not gecer:
+            return None
     except Exception:
         pass   # kalite modülü hatası paylaşımı engellememellİ
 

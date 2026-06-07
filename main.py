@@ -350,6 +350,24 @@ async def main() -> None:
         f"Bekleme: {config.KUYRUK_BEKLEME}s"
     ))
 
+    # v23.33 — DB KALICILIK TEŞHİSİ: karakutu/sözlük/kalite-karnesi DB'de tutulur.
+    # DATA_DIR kalıcı bir volume değilse (Railway çalışma dizinine düşmüşse) DB
+    # her restart'ta sıfırlanır. Kullanıcı durumu net görsün diye açıkça logla.
+    try:
+        from utils import db as _db
+        _data_dir_env = os.environ.get("DATA_DIR")
+        _kalici = bool(_data_dir_env) or os.path.exists("/data")
+        if _kalici:
+            log("OK", f"💾 DB kalıcı konumda: {_db.DB_FILE} "
+                       "(karakutu/sözlük/kalite karnesi restart'ta korunur)")
+        else:
+            log("UYARI", f"⚠️ DB GEÇİCİ konumda: {_db.DB_FILE} — her restart'ta "
+                          "SIFIRLANIR! karakutu, sözlük ve kalite karnesi kaybolur. "
+                          "Railway'de kalıcı VOLUME ekleyip DATA_DIR'i ona ayarlayın "
+                          "(Settings → Volumes → /data, sonra DATA_DIR=/data).")
+    except Exception:
+        pass
+
     # #3 SQLite başlat (JSON varsa migrate eder)
     try:
         db.init()

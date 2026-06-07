@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.30-2026.06.01"   # 'Alisveris firsati'/'Alisveris' sahte urun adi kaldirildi: 'alisveris' jenerik kategori kelimesi olarak eklendi (Gemini'nin urettigi jenerik ad kapidan geciyordu)
+SURUM = "v23.33-2026.06.01"   # Kalite skoru artik esikten bagimsiz her zaman hesaplanip karneye kaydedilir (esik=0 iken bile /karne dolar; filtreleme yalniz esik>0) + baslangicta DB kalicilik teshisi/uyarisi (karakutu/sozluk/karne DATA_DIR kalici degilse sifirlaniyor)
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
@@ -179,6 +179,12 @@ KAYNAK_KANALLAR = [
 _engelli_env = os.environ.get("ENGELLI_GONDERENLER", "magfi")
 ENGELLI_GONDERENLER = [x.strip().lstrip("@").lower()
                        for x in _engelli_env.split(",") if x.strip()]
+
+# ── Kitap filtresi (v23.32) ──────────────────────────────────────
+# Kitaplar çoğunlukla gerçek indirimde olsa da kanalı tek tipleştiriyordu.
+# Açıkken (varsayılan) Amazon kitap linkleri (ISBN biçimli ASIN) paylaşılmaz.
+# Kapatmak için: KITAP_FILTRELE=0
+KITAP_FILTRELE = os.environ.get("KITAP_FILTRELE", "1") not in ("0", "false", "False", "")
 
 # ── Kategoriler ──────────────────────────────────────────────────
 # NOT: Kategori listesi artık ML modelinden geliyor (utils/ml_kategoriler.py).
