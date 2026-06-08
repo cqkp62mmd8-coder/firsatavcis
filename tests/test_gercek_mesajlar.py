@@ -2665,3 +2665,30 @@ class TestV2334KuponCokluLink:
         """Tek link varsa: ilk ürün paylaşılır, ikincisi aynı linke düşüp dedup'ta elenir."""
         benzersiz = self._dedup(self._adaylar(self.VALKYRIE, ["https://sl.n11.com/n/tek"]))
         assert len(benzersiz) == 1
+
+
+class TestV2335UrunOlmayanLinkFiltresi:
+    """v23.35 — WhatsApp/Telegram/sosyal paylaş-katıl linkleri ürün sayısını
+    şişirip çoklu-ürün ayrımını bozuyordu. Bu linkler artık eleniyor."""
+
+    def test_urun_olmayan_linkler_elenir(self):
+        from handlers.mesaj import _urun_olmayan_link_mi
+        for u in ["https://chat.whatsapp.com/ABC", "https://wa.me/123",
+                  "https://t.me/kanal", "https://instagram.com/x",
+                  "https://youtu.be/abc", "https://x.com/foo"]:
+            assert _urun_olmayan_link_mi(u) is True, f"elenmedi: {u}"
+
+    def test_urun_linkleri_korunur(self):
+        from handlers.mesaj import _urun_olmayan_link_mi
+        for u in ["https://www.amazon.com.tr/dp/B0X?tag=x", "https://ty.gl/abc",
+                  "https://sl.n11.com/n/xyz", "https://app.hb.biz/abc",
+                  "https://www.trendyol.com/x-p-1"]:
+            assert _urun_olmayan_link_mi(u) is False, f"yanlışlıkla elendi: {u}"
+
+    def test_tek_urun_uc_paylas_butonu(self):
+        """1 ürün + 3 paylaş butonu → filtreden sonra 1 ürün linki."""
+        from handlers.mesaj import _urun_olmayan_link_mi
+        btn = ["https://www.amazon.com.tr/dp/B0X", "https://chat.whatsapp.com/A",
+               "https://t.me/kanal", "https://instagram.com/x"]
+        temiz = [x for x in btn if not _urun_olmayan_link_mi(x)]
+        assert temiz == ["https://www.amazon.com.tr/dp/B0X"]

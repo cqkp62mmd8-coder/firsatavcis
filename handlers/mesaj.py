@@ -490,6 +490,24 @@ def _coklu_link_satir_ayir(blok: str, linkler: list, orijinal_mesaj: str) -> lis
     return adaylar
 
 
+def _urun_olmayan_link_mi(url: str) -> bool:
+    """v23.35 — WhatsApp/Telegram/sosyal medya paylaş-katıl butonları ürün
+    linki DEĞİLDİR. Bu linkler ürün sayısını şişirip çoklu-ürün ayrımını
+    bozuyordu (örn tek ürünlü mesaj + WhatsApp paylaş butonu → '1 segment /
+    4 link' uyuşmazlığı). Ürün linkleri (amazon, trendyol, n11, hb vb) korunur.
+    """
+    if not url:
+        return True
+    u = url.lower()
+    _urun_disi = (
+        "whatsapp.com", "wa.me", "chat.whatsapp", "api.whatsapp",
+        "t.me/", "telegram.me", "telegram.dog", "telegram.org",
+        "instagram.com", "facebook.com", "fb.com", "fb.me",
+        "twitter.com", "x.com/", "youtube.com", "youtu.be", "tiktok.com",
+    )
+    return any(d in u for d in _urun_disi)
+
+
 def _kitap_linki_mi(link: str, btn_links: list | None = None) -> bool:
     """v23.32 — Amazon kitap linki mi? Kitaplar ASIN olarak ISBN-10 kullanır:
     10 rakam VEYA 9 rakam + X (örn 9750854586, 080485277X). Diğer ürünlerin
@@ -610,6 +628,12 @@ def kaydet(client: TelegramClient, kuyruk: asyncio.Queue) -> None:
             # Tekrarları temizle (exact string), sırasını koru
             seen = set()
             btn_links = [x for x in btn_links if not (x in seen or seen.add(x))]
+
+            # v23.35 — Ürün OLMAYAN linkleri (WhatsApp/Telegram/sosyal paylaş-katıl
+            # butonları) ele. Bunlar ürün sayısını şişirip çoklu-ürün ayrımını
+            # bozuyordu (canlıda 33 WhatsApp linki "X segment / Y link" uyuşmazlığı
+            # yaratmıştı). Ürün linkleri (amazon/trendyol/n11/hb...) korunur.
+            btn_links = [x for x in btn_links if not _urun_olmayan_link_mi(x)]
 
             # ÜRÜN bazında grupla — aynı ürünün affiliate/ref farklı linkleri
             # tek ürün sayılır; gerçekten farklı ürünler ayrı tutulur.

@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.34-2026.06.01"   # Coklu kupon urunu (firetag/dusentag) her birine KENDI linki verilir; eskiden hepsi ayni link aliyordu, duplicate filtresi 2. urunu (orn Kretuar Maket Bicak Seti) dusuruyordu — artik hepsi paylasiliyor
+SURUM = "v23.35-2026.06.01"   # Urun-olmayan linkler (WhatsApp/Telegram/sosyal paylas-katil butonlari) elendi: link sayisini sisirip coklu-urun ayrimini bozuyordu (1 segment / 4 link uyusmazliklari). Urun linkleri korunur
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
