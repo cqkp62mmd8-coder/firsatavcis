@@ -281,3 +281,231 @@ class TestHavuzYardimci:
                       ("2000-01-01T00:00:00", "a:1"))
         assert havuz.eski_temizle(60) == 1
         assert havuz.firsat_sayisi() == 0
+
+
+# ════════════════════════════════════════════════════════════════
+# Faz 3 — Şablonlar + affiliate enjeksiyonu + gönderim hattı
+# ════════════════════════════════════════════════════════════════
+def _temiz_gonderim():
+    musteri, depo, havuz = _temiz_havuz()
+    from cok_kiraci import sablonlar, affiliate, gonderim
+    importlib.reload(sablonlar)
+    importlib.reload(affiliate)
+    importlib.reload(gonderim)
+    return musteri, depo, havuz, sablonlar, affiliate, gonderim
+
+
+class _SahteGonderici:
+    """Test için: çağrıları kaydeder, başarı/başarısızlık taklit eder."""
+    def __init__(self, basarili=True):
+        self.basarili = basarili
+        self.cagrilar = []
+    def __call__(self, kanal, mesaj, gorsel):
+        self.cagrilar.append((kanal, mesaj, gorsel))
+        return self.basarili
+
+
+class TestSablonRender:
+    def test_uc_sablon_calisir(self):
+        *_, sablonlar, _, _ = _temiz_gonderim()
+        f = _firsat(anahtar="a:1", baslik="Test Ürünü", indirim=40)
+        for sid in sablonlar.sablon_listesi():
+            m = sablonlar.render(sid, f, "https://link")
+            assert "Test Ürünü" in m and "https://link" in m
+
+    def test_indirim_gosterilir(self):
+        *_, sablonlar, _, _ = _temiz_gonderim()
+        f = _firsat(anahtar="a:1", indirim=45)
+        assert "45" in sablonlar.render("klasik", f, "https://l")
+
+    def test_bilinmeyen_sablon_klasige_duser(self):
+        *_, sablonlar, _, _ = _temiz_gonderim()
+        f = _firsat(anahtar="a:1", baslik="XÜrün")
+        m = sablonlar.render("yokboyle", f, "https://l")
+        assert "XÜrün" in m and "https://l" in m
+
+    def test_eski_fiyat_yoksa_patlamaz(self):
+        *_, sablonlar, _, _ = _temiz_gonderim()
+        f = _firsat(anahtar="a:1")
+        f["eski_fiyat"] = None
+        assert "https://l" in sablonlar.render("vurgulu", f, "https://l")
+
+    def test_sablon_listesi(self):
+        *_, sablonlar, _, _ = _temiz_gonderim()
+        assert set(sablonlar.sablon_listesi()) == {"klasik", "minimal", "vurgulu"}
+
+
+class TestAffiliateEnjekte:
+    def test_amazon_tag_ekler(self):
+        *_, affiliate, _ = _temiz_gonderim()
+        s = affiliate.enjekte("https://www.amazon.com.tr/dp/B0ABC", "amazon", "benimtag-21")
+        assert "tag=benimtag-21" in s
+
+    def test_amazon_mevcut_tag_degistirir(self):
+        *_, affiliate, _ = _temiz_gonderim()
+        s = affiliate.enjekte("https://www.amazon.com.tr/dp/B0ABC?tag=eski-21", "amazon", "yeni-21")
+        assert "tag=yeni-21" in s and "eski-21" not in s
+
+    def test_diger_platform_degismez(self):
+        *_, affiliate, _ = _temiz_gonderim()
+        url = "https://www.trendyol.com/p/123"
+        assert affiliate.enjekte(url, "trendyol", "TY1") == url
+
+    def test_etiket_yoksa_degismez(self):
+        *_, affiliate, _ = _temiz_gonderim()
+        url = "https://www.amazon.com.tr/dp/B0ABC"
+        assert affiliate.enjekte(url, "amazon", "") == url
+
+    def test_destek_durumu(self):
+        *_, affiliate, _ = _temiz_gonderim()
+        assert affiliate.desteklenen_platform("amazon") is True
+        assert affiliate.desteklenen_platform("trendyol") is False
+
+
+class TestGonderimHatti:
+    def _hazirla(self, musteri, havuz):
+        m = musteri.musteri_olustur()
+        musteri.ayar_kaydet(m["id"], kanal="@musteri_kanal", min_indirim=0,
+                            kategoriler=[], sablon="klasik")
+        musteri.affiliate_kaydet(m["id"], "amazon", "mytag-21")
+        havuz.firsat_ekle(_firsat(anahtar="amazon:A1", magaza="amazon",
+                                  url="https://amazon.com.tr/dp/B0X", indirim=30))
+        return m
+
+    def test_gonderir_kaydeder_ve_tekrar_etmez(self):
+        musteri, depo, havuz, *_ , gonderim = _temiz_gonderim()
+        m = self._hazirla(musteri, havuz)
+        g = _SahteGonderici()
+        assert gonderim.musteri_gonder(m["id"], g) == 1
+        kanal, mesaj, _gorsel = g.cagrilar[0]
+        assert kanal == "@musteri_kanal"
+        assert "tag=mytag-21" in mesaj                  # affiliate enjekte edildi
+        assert gonderim.musteri_gonder(m["id"], g) == 0  # gonderim_log → tekrar yok
+
+    def test_pasif_musteri_gondermez(self):
+        musteri, depo, havuz, *_, gonderim = _temiz_gonderim()
+        m = self._hazirla(musteri, havuz)
+        musteri.askiya_al(m["id"])
+        assert gonderim.musteri_gonder(m["id"], _SahteGonderici()) == 0
+
+    def test_yayini_kapali_gondermez(self):
+        musteri, depo, havuz, *_, gonderim = _temiz_gonderim()
+        m = self._hazirla(musteri, havuz)
+        musteri.ayar_kaydet(m["id"], aktif=False)
+        assert gonderim.musteri_gonder(m["id"], _SahteGonderici()) == 0
+
+    def test_kanal_yoksa_gondermez(self):
+        musteri, depo, havuz, *_, gonderim = _temiz_gonderim()
+        m = musteri.musteri_olustur()
+        musteri.ayar_kaydet(m["id"], min_indirim=0, kategoriler=[])  # kanal yok
+        havuz.firsat_ekle(_firsat(anahtar="a:1"))
+        assert gonderim.musteri_gonder(m["id"], _SahteGonderici()) == 0
+
+    def test_basarisiz_gonderim_yeniden_denenir(self):
+        musteri, depo, havuz, *_, gonderim = _temiz_gonderim()
+        m = self._hazirla(musteri, havuz)
+        assert gonderim.musteri_gonder(m["id"], _SahteGonderici(basarili=False)) == 0
+        # log'a yazılmadı → başarılı gönderici ile yeniden denenebilir
+        assert gonderim.musteri_gonder(m["id"], _SahteGonderici(basarili=True)) == 1
+
+    def test_tum_musteriler_gonder(self):
+        musteri, depo, havuz, *_, gonderim = _temiz_gonderim()
+        a = musteri.musteri_olustur()
+        b = musteri.musteri_olustur()
+        for c in (a, b):
+            musteri.ayar_kaydet(c["id"], kanal=f"@k{c['id']}", min_indirim=0, kategoriler=[])
+        havuz.firsat_ekle(_firsat(anahtar="x:1", indirim=10))
+        sonuc = gonderim.tum_musteriler_gonder(_SahteGonderici())
+        assert sonuc.get(a["id"]) == 1 and sonuc.get(b["id"]) == 1
+
+
+# ════════════════════════════════════════════════════════════════
+# Faz 4 — Müşteri web paneli (oturum + form + sayfa mantığı)
+# ════════════════════════════════════════════════════════════════
+def _temiz_panel():
+    musteri, depo, havuz, sablonlar, affiliate, gonderim = _temiz_gonderim()
+    from cok_kiraci import panel
+    importlib.reload(panel)
+    return musteri, panel
+
+
+class TestPanelOturum:
+    def test_token_cozulur(self):
+        musteri, panel = _temiz_panel()
+        t = panel.oturum_token("FP-ABCD-EFGH-JKLM")
+        assert panel.oturum_coz(t) == "FP-ABCD-EFGH-JKLM"
+
+    def test_kurcalanmis_token_reddedilir(self):
+        musteri, panel = _temiz_panel()
+        t = panel.oturum_token("FP-ABCD-EFGH-JKLM")
+        sahte = t[:-1] + ("0" if t[-1] != "0" else "1")
+        assert panel.oturum_coz(sahte) is None
+        assert panel.oturum_coz("") is None
+        assert panel.oturum_coz("FP-XXXX.yanlisimza") is None
+
+    def test_cerezden_aktif_musteri(self):
+        musteri, panel = _temiz_panel()
+        m = musteri.musteri_olustur()
+        t = panel.oturum_token(m["lisans_key"])
+        giren = panel.cerezden_musteri(t)
+        assert giren is not None and giren["id"] == m["id"]
+
+    def test_cerezden_pasif_musteri_yok(self):
+        musteri, panel = _temiz_panel()
+        m = musteri.musteri_olustur()
+        musteri.askiya_al(m["id"])
+        t = panel.oturum_token(m["lisans_key"])
+        assert panel.cerezden_musteri(t) is None
+
+
+class TestPanelForm:
+    def test_form_ayar_kaydeder(self):
+        musteri, panel = _temiz_panel()
+        m = musteri.musteri_olustur()
+        panel.form_isle(m["id"], {
+            "kanal": "@benimkanal", "min_indirim": "35",
+            "kategoriler": "elektronik, moda", "sablon": "vurgulu",
+            "aktif": "1", "aff_amazon": "tag-21",
+        })
+        a = musteri.ayar_getir(m["id"])
+        assert a["kanal"] == "@benimkanal"
+        assert a["min_indirim"] == 35
+        assert a["kategoriler"] == ["elektronik", "moda"]
+        assert a["sablon"] == "vurgulu"
+        assert a["aktif"] is True
+        assert musteri.affiliate_getir(m["id"])["amazon"] == "tag-21"
+
+    def test_yayin_duraklatma(self):
+        musteri, panel = _temiz_panel()
+        m = musteri.musteri_olustur()
+        panel.form_isle(m["id"], {"aktif": "0"})
+        assert musteri.ayar_getir(m["id"])["aktif"] is False
+
+    def test_gecersiz_min_indirim_yoksayilir(self):
+        musteri, panel = _temiz_panel()
+        m = musteri.musteri_olustur()
+        panel.form_isle(m["id"], {"min_indirim": "abc"})   # patlamamalı
+        assert musteri.ayar_getir(m["id"])["min_indirim"] == 20
+
+
+class TestPanelSayfa:
+    def test_giris_sayfasi(self):
+        musteri, panel = _temiz_panel()
+        h = panel.giris_html()
+        assert 'action="/musteri/giris"' in h and 'name="lisans"' in h
+
+    def test_giris_hata_gosterir(self):
+        musteri, panel = _temiz_panel()
+        assert "Lisans hatalı" in panel.giris_html("Lisans hatalı")
+
+    def test_panel_mevcut_degerleri_gosterir(self):
+        musteri, panel = _temiz_panel()
+        m = musteri.musteri_olustur()
+        musteri.ayar_kaydet(m["id"], kanal="@gorunsun", min_indirim=42, sablon="minimal")
+        musteri.affiliate_kaydet(m["id"], "amazon", "amztag-21")
+        h = panel.panel_html(m, musteri.ayar_getir(m["id"]), musteri.affiliate_getir(m["id"]))
+        assert "@gorunsun" in h                 # mevcut kanal
+        assert 'value="42"' in h                # mevcut min indirim
+        assert "amztag-21" in h                 # mevcut affiliate etiketi
+        assert "aff_amazon" in h and "aff_trendyol" in h
+        assert "minimal" in h                   # şablon seçeneği

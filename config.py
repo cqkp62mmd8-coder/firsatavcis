@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.43-2026.06.01"   # SaaS Faz 2 cekirdek: cok_kiraci/havuz.py — ortak firsat havuzu (firsatlar tablosu, havuz-seviyesi tekillestirme, firsat_ekle kaynak-bagimsiz giris) + musteri_icin_firsatlar (kategori + min indirim + musteri-basina gonderilmis haric yonlendirme). 8 test. Kaynak toplama adaptoru kaynak kararina bagli
+SURUM = "v23.45-2026.06.01"   # SaaS Faz 4 cekirdek: cok_kiraci/panel.py — musteri web paneli (lisansla giris + imzali oturum cerezi + ayar formu: kanal/yayin/min indirim/kategoriler/sablon/affiliate + marka renkli sayfalar). Sunucudan-bagimsiz mantik, 10 test. HTTP sunucu katmani (FastAPI/hafif) canli. Veri kaynagi: PA-API kapandi -> Amazon Creators API onerisi
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
