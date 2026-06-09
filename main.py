@@ -19,7 +19,7 @@ from handlers import mesaj as mesaj_handler, callback as callback_handler
 from handlers import admin as admin_handler
 from services.kuyruk import worker as kuyruk_worker
 from services import stok_takip, health
-from schedulers import gunluk, surpriz, haftalik
+from schedulers import gunluk, surpriz, haftalik, kaynak_tarama
 
 
 # ── Graceful shutdown — #3 ──────────────────────────────────────
@@ -350,6 +350,21 @@ async def main() -> None:
         f"Bekleme: {config.KUYRUK_BEKLEME}s"
     ))
 
+    # v23.39 — LİSANS DENETİMİ (satılan kopyalar). Denetim kapalıysa (satıcı/dev)
+    # atlanır. Açık + anahtar geçersiz/süresi dolmuşsa net mesajla durdurulur.
+    if getattr(config, "LISANS_DENETIMI", False):
+        try:
+            from utils import lisans
+            gecerli, bilgi = lisans.dogrula(config.LISANS_ANAHTARI)
+        except Exception:
+            gecerli, bilgi = False, {"hata": "modül"}
+        if not gecerli:
+            log("KRITIK", f"⛔ Lisans geçersiz ({bilgi.get('hata', '?')}). "
+                          "LISANS_ANAHTARI ayarını kontrol edin veya satıcıyla iletişime geçin.")
+            raise SystemExit("Lisans doğrulanamadı")
+        log("OK", f"🔑 Lisans geçerli — {bilgi.get('alici', '?')} "
+                   f"({lisans.kalan_gun(bilgi)} gün kaldı)")
+
     # v23.33 — DB KALICILIK TEŞHİSİ: karakutu/sözlük/kalite-karnesi DB'de tutulur.
     # DATA_DIR kalıcı bir volume değilse (Railway çalışma dizinine düşmüşse) DB
     # her restart'ta sıfırlanır. Kullanıcı durumu net görsün diye açıkça logla.
@@ -424,7 +439,12 @@ async def main() -> None:
             # İstatistiği Telegram'dan yükle (kalıcılık)
             await cache.telegram_yukle(tg.client)
 
-            mesaj_handler.kaydet(tg.client, kuyruk)
+            # v23.37 — Kanal dinleme anahtarı. Feed/mağaza kaynağına geçildiğinde
+            # KANAL_DINLE=0 ile kapatılır; yeni kaynak çalışana kadar açık tutun.
+            if getattr(config, "KANAL_DINLE", True):
+                mesaj_handler.kaydet(tg.client, kuyruk)
+            else:
+                log("SISTEM", "📴 Kanal dinleme KAPALI (KANAL_DINLE=0) — fırsatlar kaynaklardan gelecek")
             admin_handler.kaydet(tg.client, kuyruk, tg.bot_client)   # Admin komutları
 
             # #1 catch_up — restart sırasında kaçan mesajları yakala
@@ -466,6 +486,7 @@ async def main() -> None:
                 "haftalik":      lambda: haftalik.zamanlayici(tg.client),
                 "cache_kaydet":  lambda: cache.periyodik_kaydet(600),
                 "stok_takip":    lambda: stok_takip.kontrol_dongusu(tg.client),
+                "kaynak_tarama": lambda: kaynak_tarama.baslat(kuyruk),
                 "gunluk_yedek":  lambda: cache.gunluk_yedek(),
                 "gunluk_bakim":  lambda: _gunluk_bakim(),
                 "db_bakim":      lambda: _db_bakim_dongusu(),

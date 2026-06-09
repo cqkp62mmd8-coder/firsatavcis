@@ -2692,3 +2692,98 @@ class TestV2335UrunOlmayanLinkFiltresi:
                "https://t.me/kanal", "https://instagram.com/x"]
         temiz = [x for x in btn if not _urun_olmayan_link_mi(x)]
         assert temiz == ["https://www.amazon.com.tr/dp/B0X"]
+
+
+class TestV2337KaynaklarKatmani:
+    """v23.37 — Kanal yerine modüler kaynaklar katmanı (feed + mağaza izleme).
+    Feed okuyucu XML/CSV/JSON ayrıştırır; zamanlayıcı fırsatları mevcut hatta besler."""
+
+    def test_feed_xml_ayristirma(self):
+        from kaynaklar.feed import _ayristir
+        xml = ('<rss xmlns:g="http://base.google.com/ns/1.0"><channel>'
+               '<item><g:title>Bosch Matkap</g:title><g:price>1499,90 TL</g:price>'
+               '<g:sale_price>999,90 TL</g:sale_price><g:link>https://ty.gl/a</g:link></item>'
+               '</channel></rss>')
+        eslem = {"ad":"title","fiyat":"sale_price","eski_fiyat":"price","url":"link","kayit_yolu":"item"}
+        r = _ayristir(xml, "xml", eslem, "t")
+        assert len(r) == 1 and r[0]["ad"] == "Bosch Matkap"
+        assert r[0]["fiyat"] == 999.90 and r[0]["eski_fiyat"] == 1499.90
+
+    def test_feed_json_ic_ice(self):
+        from kaynaklar.feed import _ayristir
+        js = '{"data":{"products":[{"t":"Mouse","now":299,"was":499,"u":"https://ty.gl/m"}]}}'
+        eslem = {"ad":"t","fiyat":"now","eski_fiyat":"was","url":"u","kayit_yolu":"data.products"}
+        r = _ayristir(js, "json", eslem, "t")
+        assert len(r) == 1 and r[0]["fiyat"] == 299.0
+
+    def test_feed_gecersiz_elenir(self):
+        from kaynaklar.feed import _ayristir
+        js = '{"items":[{"t":"Yok","now":0,"u":"https://x"},{"t":"","now":50,"u":"https://y"}]}'
+        eslem = {"ad":"t","fiyat":"now","url":"u","kayit_yolu":"items"}
+        assert _ayristir(js, "json", eslem, "t") == []
+
+    def test_indirim_hesapla(self):
+        from kaynaklar.temel import indirim_hesapla
+        assert indirim_hesapla(1000, 750) == 25
+        assert indirim_hesapla(100, 100) == 0
+        assert indirim_hesapla(None, 50) == 0
+
+    def test_scheduler_dusuk_indirim_eler(self):
+        import os, asyncio
+        os.environ["DATA_DIR"] = "/tmp/test_sch37"; os.makedirs("/tmp/test_sch37", exist_ok=True)
+        import config; config.MIN_INDIRIM = 20; config.KITAP_FILTRELE = True
+        from utils import db; db.init()
+        from schedulers.kaynak_tarama import _firsat_isle
+        import services.analiz as a
+        q = asyncio.Queue(maxsize=10)
+        a._mesaj_cache.clear()
+        # %8 indirim → elenir
+        assert _firsat_isle({"url":"https://ty.gl/x","ad":"Mouse","fiyat":459,"eski_fiyat":499}, q) is False
+        a._mesaj_cache.clear()
+        # %33 → eklenir
+        assert _firsat_isle({"url":"https://ty.gl/y","ad":"Bosch Matkap","fiyat":999,"eski_fiyat":1499}, q) is True
+
+    def test_scheduler_kitap_eler(self):
+        import os, asyncio
+        os.environ["DATA_DIR"] = "/tmp/test_sch37b"; os.makedirs("/tmp/test_sch37b", exist_ok=True)
+        import config; config.MIN_INDIRIM = 20; config.KITAP_FILTRELE = True
+        from utils import db; db.init()
+        from schedulers.kaynak_tarama import _firsat_isle
+        import services.analiz as a
+        q = asyncio.Queue(maxsize=10)
+        a._mesaj_cache.clear()
+        assert _firsat_isle({"url":"https://amazon.com.tr/dp/9750854586","ad":"Dar Kapı","fiyat":89,"eski_fiyat":199}, q) is False
+
+
+class TestV2339Lisans:
+    """v23.39 — HMAC imzalı lisans anahtarları (üretim + doğrulama + süre)."""
+
+    def test_uret_dogrula(self):
+        from utils import lisans
+        k = lisans.uret("alici@x.com", 365)
+        g, b = lisans.dogrula(k)
+        assert g is True and b["alici"] == "alici@x.com"
+        assert lisans.kalan_gun(b) >= 360
+
+    def test_kurcalanmis_red(self):
+        from utils import lisans
+        k = lisans.uret("a", 30)
+        g, _ = lisans.dogrula(k[:-4] + "0000")
+        assert g is False
+
+    def test_farkli_gizli_red(self):
+        from utils import lisans
+        k = lisans.uret("korsan", 30, gizli=b"baska")
+        g, b = lisans.dogrula(k)   # botun gizlisiyle doğrula
+        assert g is False and b["hata"] == "imza"
+
+    def test_suresi_dolmus_red(self):
+        from utils import lisans
+        k = lisans.uret("eski", -1)
+        g, b = lisans.dogrula(k)
+        assert g is False and b["hata"] == "süresi doldu"
+
+    def test_bozuk_bicim_red(self):
+        from utils import lisans
+        assert lisans.dogrula("saçmalık")[0] is False
+        assert lisans.dogrula("")[0] is False

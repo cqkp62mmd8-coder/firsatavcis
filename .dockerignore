@@ -1,0 +1,24 @@
+# Sürüm kontrolü / önbellek
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Yerel veri / sırlar (imaja ASLA girmemeli)
+.env
+*.db
+*.sqlite
+*.sqlite3
+*.log
+/data
+
+# Sanal ortam / geçici
+.venv/
+venv/
+/tmp/
+*.zip
+
+# Geliştirme dosyaları
+tests/__pycache__/

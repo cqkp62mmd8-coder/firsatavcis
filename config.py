@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.35-2026.06.01"   # Urun-olmayan linkler (WhatsApp/Telegram/sosyal paylas-katil butonlari) elendi: link sayisini sisirip coklu-urun ayrimini bozuyordu (1 segment / 4 link uyusmazliklari). Urun linkleri korunur
+SURUM = "v23.39-2026.06.01"   # Lisans sistemi: HMAC imzali anahtarlar (lisans_uret.py satici araci + baslangic denetimi, sure/alici destekli). Varsayilan KAPALI (satici/dev); alici LISANS_DENETIMI=1 ile kullanir. Kendi-barindirilanda casdiricidir (durust not modulde)
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
@@ -219,3 +219,39 @@ GUVENILIR_MARKALAR = [
     "adidas", "puma", "asus", "lenovo", "dell", "xiaomi", "huawei",
     "bosch", "siemens", "toshiba", "canon", "hp", "acer",
 ]
+
+# ════════════════════════════════════════════════════════════════
+# Kaynaklar katmanı (v23.37) — kanal dinleme yerine feed/mağaza
+# ════════════════════════════════════════════════════════════════
+# Kanal dinleme açık/kapalı. Yeni kaynak çalışana kadar AÇIK tutun ki
+# bot susmasın. Feed/mağaza kaynağına geçince KANAL_DINLE=0 yapın.
+KANAL_DINLE = os.environ.get("KANAL_DINLE", "1") not in ("0", "false", "False", "")
+
+# Kaynak taraması (feed + mağaza). Varsayılan KAPALI — yapılandırıp açın.
+KAYNAK_TARAMA_AKTIF = os.environ.get("KAYNAK_TARAMA_AKTIF", "0") in ("1", "true", "True")
+KAYNAK_TARAMA_DK = _int_env("KAYNAK_TARAMA_DK", 30, min_d=5, max_d=1440)
+
+# ── Feed kaynağı (affiliate ağ / mağaza ortaklık feed'i) ────────
+FEED_URL    = os.environ.get("FEED_URL", "").strip()
+FEED_BICIM  = os.environ.get("FEED_BICIM", "xml").strip().lower()   # xml | csv | json
+# Alan eşlemesi — feed'inizdeki alan adlarını yazın:
+FEED_AD_ALAN        = os.environ.get("FEED_AD_ALAN", "title")
+FEED_FIYAT_ALAN     = os.environ.get("FEED_FIYAT_ALAN", "sale_price")
+FEED_ESKIFIYAT_ALAN = os.environ.get("FEED_ESKIFIYAT_ALAN", "price")
+FEED_URL_ALAN       = os.environ.get("FEED_URL_ALAN", "link")
+FEED_GORSEL_ALAN    = os.environ.get("FEED_GORSEL_ALAN", "image_link")
+FEED_KATEGORI_ALAN  = os.environ.get("FEED_KATEGORI_ALAN", "")
+FEED_MAGAZA_SABIT   = os.environ.get("FEED_MAGAZA_SABIT", "")        # ör: Trendyol
+FEED_KAYIT_YOLU     = os.environ.get("FEED_KAYIT_YOLU", "")          # XML: tekrar eden öğe (item); JSON: dizi yolu (data.products)
+
+# ── Mağaza izleme (watchlist fiyat takibi) ──────────────────────
+# İzlenecek ürün URL'leri (virgül veya satırla ayrılmış). Mevcut scraping ile
+# fiyatları kontrol eder; indirim varsa paylaşır. Deal-sayfası taraması değil.
+_izleme_env = os.environ.get("MAGAZA_IZLEME_URL", "")
+MAGAZA_IZLEME_URL = [u.strip() for u in _izleme_env.replace("\n", ",").split(",") if u.strip()]
+
+# ── Lisans (v23.39) ──────────────────────────────────────────────
+# Satılan kopyalarda lisans denetimi. Satıcı/geliştirici modunda KAPALI
+# (varsayılan); alıcı LISANS_DENETIMI=1 ve LISANS_ANAHTARI ile kullanır.
+LISANS_ANAHTARI = os.environ.get("LISANS_ANAHTARI", "").strip()
+LISANS_DENETIMI = os.environ.get("LISANS_DENETIMI", "0") in ("1", "true", "True")
