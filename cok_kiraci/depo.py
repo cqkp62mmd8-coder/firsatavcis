@@ -46,6 +46,23 @@ CREATE TABLE IF NOT EXISTS gonderim_log (
     gonderim     TEXT,                     -- ISO zaman
     PRIMARY KEY (musteri_id, urun_anahtar)
 );
+CREATE TABLE IF NOT EXISTS firsatlar (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    urun_anahtar TEXT UNIQUE NOT NULL,     -- kararlı ürün kimliği (havuz-seviyesi tekilleştirme)
+    baslik       TEXT DEFAULT '',
+    urun_url     TEXT DEFAULT '',          -- HAM ürün adresi (affiliate etiketi gönderimde enjekte edilir)
+    gorsel_url   TEXT DEFAULT '',
+    magaza       TEXT DEFAULT '',          -- amazon / trendyol / hepsiburada / n11 ...
+    kategori     TEXT DEFAULT '',
+    alt_kategori TEXT DEFAULT '',
+    fiyat        REAL,
+    eski_fiyat   REAL,
+    indirim      INTEGER DEFAULT 0,        -- %
+    eklendi      TEXT,                     -- ilk görülme (ISO)
+    veri         TEXT DEFAULT '{}'         -- ek alanlar (kupon vb.) JSON
+);
+CREATE INDEX IF NOT EXISTS idx_firsat_indirim ON firsatlar (indirim);
+CREATE INDEX IF NOT EXISTS idx_firsat_kategori ON firsatlar (kategori);
 """
 
 

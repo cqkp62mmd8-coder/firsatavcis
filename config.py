@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.42-2026.06.01"   # SaaS PIVOTU Faz 1: cok_kiraci/ paketi — cok-kiracili musteri/abonelik/ayar/affiliate veri modeli + is mantigi (lisans key, panel-giris dogrulama, abonelik suresi, musteri-basina ayar + tekrar engelleme). 16 test. Mevcut tek-kanalli botu BOZMAZ (eklemeli). SAAS_MIMARI.md eklendi
+SURUM = "v23.43-2026.06.01"   # SaaS Faz 2 cekirdek: cok_kiraci/havuz.py — ortak firsat havuzu (firsatlar tablosu, havuz-seviyesi tekillestirme, firsat_ekle kaynak-bagimsiz giris) + musteri_icin_firsatlar (kategori + min indirim + musteri-basina gonderilmis haric yonlendirme). 8 test. Kaynak toplama adaptoru kaynak kararina bagli
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)

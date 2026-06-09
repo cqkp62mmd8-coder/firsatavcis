@@ -79,9 +79,12 @@ doğrulama, biçimleme) bu akışta **ortak işleme motoru** olarak yeniden kull
   `cok_kiraci/` paketi: müşteri/abonelik/ayar/affiliate veri modeli + iş mantığı.
   Lisans anahtarı üretimi, panel-girişi doğrulama, abonelik süresi, müşteri-başına
   ayar ve tekrar engelleme. 16 test.
-- **Faz 2 — Ortak fırsat havuzu + kaynak toplama**
-  `firsatlar` tablosu; kaynaklardan (feed/kazıma) havuzu besleme; müşteri ayarına
-  göre filtreleme fonksiyonları.
+- **Faz 2 — Ortak fırsat havuzu + yönlendirme (ÇEKİRDEK TAMAMLANDI ✔)**
+  `cok_kiraci/havuz.py`: merkezi `firsatlar` tablosu (havuz-seviyesi tekilleştirme),
+  `firsat_ekle()` (kaynak-bağımsız tek giriş arayüzü), ve `musteri_icin_firsatlar()`
+  — müşterinin ayarına göre (kategori, min indirim) filtreleyip henüz ona
+  gönderilmemiş fırsatları döndürür. 8 test. **Kalan:** kaynak toplama adaptörü
+  (kaynaklardan havuza yazma) — veri kaynağı kararına (feed vs kazıma) bağlı.
 - **Faz 3 — Müşteri-başına gönderim**
   Tek platform botu (Telegram Bot API). Affiliate enjeksiyonu (platform platform),
   şablon seçimi, müşterinin kanalına gönderim, gonderim_log ile tekrar engelleme.
@@ -93,7 +96,9 @@ doğrulama, biçimleme) bu akışta **ortak işleme motoru** olarak yeniden kull
 
 ## 7. Mevcut durum
 
-Sürüm v23.42. Faz 1 tamam (`cok_kiraci/` + 16 test, toplam 393 test geçiyor). Mevcut
-tek-kanallı bot çalışmaya devam ediyor; çok-kiracılı katman **eklemeli** ve onu
-bozmuyor. Sıradaki adım: Faz 2 (ortak fırsat havuzu) veya kaynak kararının
-(feed vs kazıma) netleşmesi.
+Sürüm v23.43. Faz 1 ve Faz 2 çekirdeği tamam (`cok_kiraci/` paketi: musteri + depo +
+havuz, 24 test, toplam 401 test geçiyor). Mevcut tek-kanallı bot çalışmaya devam
+ediyor; çok-kiracılı katman **eklemeli** ve onu bozmuyor. Havuz, `firsat_ekle()` ile
+herhangi bir kaynaktan (feed/kazıma) beslenmeye hazır. Sıradaki somut adımlar:
+(a) veri kaynağı kararı → kaynak toplama adaptörü, ve/veya (b) Faz 3 (tek platform
+botuyla müşteri-başına gönderim, affiliate enjeksiyonu, şablon seçimi).

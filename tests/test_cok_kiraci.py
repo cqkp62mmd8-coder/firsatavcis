@@ -175,3 +175,109 @@ class TestGonderimLog:
         assert depo.gonderildi_mi(a["id"], anahtar) is True
         # aynı ürün B müşterisi için hâlâ gönderilebilir (ayrık)
         assert depo.gonderildi_mi(b["id"], anahtar) is False
+
+
+# ════════════════════════════════════════════════════════════════
+# Faz 2 — Ortak fırsat havuzu + müşteri-başına yönlendirme
+# ════════════════════════════════════════════════════════════════
+def _temiz_havuz():
+    musteri, depo = _temiz()
+    from cok_kiraci import havuz
+    importlib.reload(havuz)
+    return musteri, depo, havuz
+
+
+def _firsat(anahtar=None, magaza="amazon", kategori="elektronik", indirim=30,
+            url=None, baslik="Ürün"):
+    return {
+        "urun_anahtar": anahtar,
+        "magaza": magaza,
+        "kategori": kategori,
+        "indirim": indirim,
+        "urun_url": url or f"https://example.com/p/{anahtar or baslik}",
+        "baslik": baslik,
+        "fiyat": 100.0,
+        "eski_fiyat": 150.0,
+    }
+
+
+class TestHavuzEkle:
+    def test_yeni_ve_tekrar(self):
+        _, _, havuz = _temiz_havuz()
+        assert havuz.firsat_ekle(_firsat(anahtar="amazon:A1", indirim=30)) is True
+        assert havuz.firsat_ekle(_firsat(anahtar="amazon:A1", indirim=35)) is False
+        assert havuz.firsat_sayisi() == 1
+        assert havuz.son_firsatlar()[0]["indirim"] == 35   # güncellendi
+
+    def test_anahtar_uretimi_query_yoksayar(self):
+        _, _, havuz = _temiz_havuz()
+        havuz.firsat_ekle(_firsat(anahtar=None, url="https://x.com/p/1?ref=a", magaza="trendyol"))
+        havuz.firsat_ekle(_firsat(anahtar=None, url="https://x.com/p/1?ref=b", magaza="trendyol"))
+        assert havuz.firsat_sayisi() == 1                  # query farkı → aynı ürün
+        havuz.firsat_ekle(_firsat(anahtar=None, url="https://x.com/p/2", magaza="trendyol"))
+        assert havuz.firsat_sayisi() == 2
+
+
+class TestHavuzYonlendirme:
+    def test_min_indirim(self):
+        musteri, _, havuz = _temiz_havuz()
+        m = musteri.musteri_olustur()
+        musteri.ayar_kaydet(m["id"], min_indirim=40, kategoriler=[])
+        havuz.firsat_ekle(_firsat(anahtar="a:1", indirim=30))
+        havuz.firsat_ekle(_firsat(anahtar="a:2", indirim=50))
+        sonuc = havuz.musteri_icin_firsatlar(m["id"], musteri.ayar_getir(m["id"]))
+        assert {d["urun_anahtar"] for d in sonuc} == {"a:2"}
+
+    def test_kategori_filtre(self):
+        musteri, _, havuz = _temiz_havuz()
+        m = musteri.musteri_olustur()
+        musteri.ayar_kaydet(m["id"], min_indirim=0, kategoriler=["elektronik"])
+        havuz.firsat_ekle(_firsat(anahtar="a:1", kategori="elektronik"))
+        havuz.firsat_ekle(_firsat(anahtar="a:2", kategori="moda"))
+        sonuc = havuz.musteri_icin_firsatlar(m["id"], musteri.ayar_getir(m["id"]))
+        assert {d["urun_anahtar"] for d in sonuc} == {"a:1"}
+
+    def test_bos_kategori_tumunu_alir(self):
+        musteri, _, havuz = _temiz_havuz()
+        m = musteri.musteri_olustur()
+        musteri.ayar_kaydet(m["id"], min_indirim=0, kategoriler=[])
+        havuz.firsat_ekle(_firsat(anahtar="a:1", kategori="elektronik"))
+        havuz.firsat_ekle(_firsat(anahtar="a:2", kategori="moda"))
+        sonuc = havuz.musteri_icin_firsatlar(m["id"], musteri.ayar_getir(m["id"]))
+        assert len(sonuc) == 2
+
+    def test_gonderilmis_haric_tutulur(self):
+        musteri, depo, havuz = _temiz_havuz()
+        from utils.log import simdi_tr
+        m = musteri.musteri_olustur()
+        musteri.ayar_kaydet(m["id"], min_indirim=0, kategoriler=[])
+        havuz.firsat_ekle(_firsat(anahtar="a:1"))
+        havuz.firsat_ekle(_firsat(anahtar="a:2"))
+        depo.gonderim_kaydet(m["id"], "a:1", simdi_tr().isoformat())
+        sonuc = havuz.musteri_icin_firsatlar(m["id"], musteri.ayar_getir(m["id"]))
+        assert {d["urun_anahtar"] for d in sonuc} == {"a:2"}
+
+    def test_musteriler_farkli_alir(self):
+        musteri, _, havuz = _temiz_havuz()
+        a = musteri.musteri_olustur()
+        b = musteri.musteri_olustur()
+        musteri.ayar_kaydet(a["id"], min_indirim=0, kategoriler=["elektronik"])
+        musteri.ayar_kaydet(b["id"], min_indirim=0, kategoriler=["moda"])
+        havuz.firsat_ekle(_firsat(anahtar="x:1", kategori="elektronik"))
+        havuz.firsat_ekle(_firsat(anahtar="x:2", kategori="moda"))
+        sa = havuz.musteri_icin_firsatlar(a["id"], musteri.ayar_getir(a["id"]))
+        sb = havuz.musteri_icin_firsatlar(b["id"], musteri.ayar_getir(b["id"]))
+        assert {d["urun_anahtar"] for d in sa} == {"x:1"}
+        assert {d["urun_anahtar"] for d in sb} == {"x:2"}
+
+
+class TestHavuzYardimci:
+    def test_eski_temizle(self):
+        _, _, havuz = _temiz_havuz()
+        from utils import db
+        havuz.firsat_ekle(_firsat(anahtar="a:1"))
+        with db.cursor() as c:
+            c.execute("UPDATE firsatlar SET eklendi=? WHERE urun_anahtar=?",
+                      ("2000-01-01T00:00:00", "a:1"))
+        assert havuz.eski_temizle(60) == 1
+        assert havuz.firsat_sayisi() == 0
