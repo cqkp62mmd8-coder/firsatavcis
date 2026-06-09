@@ -2787,3 +2787,39 @@ class TestV2339Lisans:
         from utils import lisans
         assert lisans.dogrula("saçmalık")[0] is False
         assert lisans.dogrula("")[0] is False
+
+
+class TestV2340PanelAuth:
+    """v23.40 — Web paneli parola koruması (oturum çerezi)."""
+
+    def test_parola_yoksa_acik(self):
+        import config
+        config.PANEL_SIFRE = ""
+        from services.health import _yetkili_mi
+        assert _yetkili_mi({}) is True   # parola yok → eski davranış (açık)
+
+    def test_parola_varsa_cerezsiz_kapali(self):
+        import config
+        config.PANEL_SIFRE = "gizli"
+        from services.health import _yetkili_mi
+        assert _yetkili_mi({}) is False
+        assert _yetkili_mi({"cookie": "fp_oturum=yanlis"}) is False
+
+    def test_dogru_cerez_acar(self):
+        import config
+        config.PANEL_SIFRE = "gizli"
+        from services.health import _yetkili_mi, _panel_token
+        t = _panel_token()
+        assert _yetkili_mi({"cookie": f"fp_oturum={t}"}) is True
+
+    def test_parola_degisince_cerez_gecersiz(self):
+        import config
+        config.PANEL_SIFRE = "eski"
+        from services.health import _panel_token, _yetkili_mi
+        eski_token = _panel_token()
+        config.PANEL_SIFRE = "yeni"
+        assert _yetkili_mi({"cookie": f"fp_oturum={eski_token}"}) is False
+
+    def test_form_alan_coz(self):
+        from services.health import _form_alan
+        assert _form_alan("sifre=abc123&x=1", "sifre") == "abc123"

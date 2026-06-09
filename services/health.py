@@ -9,6 +9,8 @@ Endpoint:
 """
 import asyncio
 import json
+import hashlib
+import hmac
 
 from utils.log import log, simdi_tr
 
@@ -231,46 +233,156 @@ def _durum_json(kuyruk_size: int = 0) -> bytes:
     return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
 
 
+def _panel_token() -> str:
+    """PANEL_SIFRE'den türetilen oturum çerezi token'ı (parola değişince geçersiz)."""
+    import config
+    sifre = (getattr(config, "PANEL_SIFRE", "") or "")
+    return hmac.new(b"firsatpulsu-panel-oturum", sifre.encode(),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def _yetkili_mi(headers: dict) -> bool:
+    """Panel erişimi: PANEL_SIFRE boşsa açık; doluysa geçerli çerez gerekir."""
+    import config
+    if not getattr(config, "PANEL_SIFRE", ""):
+        return True
+    token = _panel_token()
+    for parca in (headers.get("cookie", "") or "").split(";"):
+        k, _, v = parca.strip().partition("=")
+        if k == "fp_oturum" and hmac.compare_digest(v.strip(), token):
+            return True
+    return False
+
+
+def _form_alan(govde: str, ad: str) -> str:
+    """application/x-www-form-urlencoded gövdeden bir alanı çöz."""
+    import urllib.parse
+    try:
+        return urllib.parse.parse_qs(govde).get(ad, [""])[0]
+    except Exception:
+        return ""
+
+
+def _giris_html(hata: str = "") -> str:
+    """Parola giriş sayfası (marka renkleriyle)."""
+    hata_blok = (f"<p class='hata'>{hata}</p>" if hata else "")
+    return f"""<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FırsatPulsu — Giriş</title><style>
+:root{{--indigo:#4F46E5;--mor:#7C3AED;--cam:#06B6D4;--zemin:#0F172A;--kart:#1E293B;--metin:#E2E8F0;--soluk:#94A3B8}}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;
+background:radial-gradient(1200px 600px at 50% -10%,#1e1b4b,var(--zemin));
+font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--metin)}}
+.kart{{background:var(--kart);border:1px solid #334155;border-radius:20px;padding:32px 28px;
+width:min(92vw,360px);box-shadow:0 20px 60px rgba(0,0,0,.4)}}
+.amblem{{width:56px;height:56px;border-radius:16px;margin:0 auto 16px;
+background:linear-gradient(135deg,var(--mor),var(--indigo) 55%,var(--cam));
+display:grid;place-items:center;font-size:26px}}
+h1{{font-size:20px;text-align:center;margin:0 0 4px}}
+.alt{{text-align:center;color:var(--soluk);font-size:13px;margin:0 0 22px}}
+label{{display:block;font-size:13px;color:var(--soluk);margin:0 0 6px}}
+input{{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #475569;
+background:#0f172a;color:var(--metin);font-size:15px}}
+input:focus{{outline:2px solid var(--indigo);border-color:transparent}}
+button{{width:100%;margin-top:16px;padding:12px;border:0;border-radius:12px;cursor:pointer;
+background:linear-gradient(135deg,var(--indigo),var(--cam));color:#fff;font-size:15px;font-weight:600}}
+.hata{{background:#7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;font-size:13px;margin:0 0 14px}}
+</style></head><body>
+<form class="kart" method="POST" action="/panel/giris">
+<div class="amblem">⚡</div>
+<h1>FırsatPulsu</h1><p class="alt">Yönetim paneli</p>
+{hata_blok}
+<label for="s">Parola</label>
+<input id="s" name="sifre" type="password" autofocus autocomplete="current-password">
+<button type="submit">Giriş yap</button>
+</form></body></html>"""
+
+
+def _yanit(kod: int, kod_metin: str, govde: bytes, tip: str = "text/html",
+           ek_baslik: str = "") -> bytes:
+    """HTTP yanıtı kur."""
+    return (
+        f"HTTP/1.1 {kod} {kod_metin}\r\n"
+        f"Content-Type: {tip}; charset=utf-8\r\n"
+        f"Content-Length: {len(govde)}\r\n"
+        f"{ek_baslik}"
+        f"Connection: close\r\n\r\n"
+    ).encode("utf-8") + govde
+
+
+async def _istek_oku(reader: asyncio.StreamReader) -> tuple[str, str, dict, str]:
+    """HTTP isteğini oku → (method, path, headers, body)."""
+    veri = b""
+    try:
+        while b"\r\n\r\n" not in veri and len(veri) < 16384:
+            parca = await asyncio.wait_for(reader.read(2048), timeout=5)
+            if not parca:
+                break
+            veri += parca
+    except Exception:
+        pass
+    if not veri:
+        return "GET", "/", {}, ""
+    try:
+        bas, _, govde = veri.partition(b"\r\n\r\n")
+        satirlar = bas.decode("utf-8", "ignore").split("\r\n")
+        ilk = satirlar[0].split(" ")
+        method = ilk[0] if ilk else "GET"
+        path = ilk[1] if len(ilk) > 1 else "/"
+        headers = {}
+        for s in satirlar[1:]:
+            if ":" in s:
+                k, _, v = s.partition(":")
+                headers[k.strip().lower()] = v.strip()
+        try:
+            clen = int(headers.get("content-length", "0"))
+        except ValueError:
+            clen = 0
+        while len(govde) < clen and len(veri) < 65536:
+            parca = await asyncio.wait_for(reader.read(2048), timeout=5)
+            if not parca:
+                break
+            govde += parca
+            veri += parca
+        return method, path, headers, govde.decode("utf-8", "ignore")
+    except Exception:
+        return "GET", "/", {}, ""
+
+
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, kuyruk=None) -> None:
     """Tek istek işle."""
     try:
-        veri = await asyncio.wait_for(reader.read(1024), timeout=5)
-        if not veri:
-            return
-        ilk_satir = veri.decode("utf-8", errors="ignore").split("\r\n")[0]
-        # "GET /health HTTP/1.1"
-        try:
-            yol = ilk_satir.split(" ")[1]
-        except IndexError:
-            yol = "/"
-
+        method, yol, headers, govde = await _istek_oku(reader)
         kuyruk_size = kuyruk.qsize() if kuyruk else 0
 
-        if yol.startswith("/health"):
+        # POST /panel/giris — parola kontrolü → oturum çerezi
+        if method == "POST" and yol.startswith("/panel/giris"):
+            import config
+            girilen = _form_alan(govde, "sifre")
+            dogru = getattr(config, "PANEL_SIFRE", "")
+            if dogru and hmac.compare_digest(girilen, dogru):
+                cerez = (f"Set-Cookie: fp_oturum={_panel_token()}; HttpOnly; "
+                         f"Path=/; Max-Age=604800; SameSite=Lax\r\n")
+                cevap = _yanit(302, "Found", b"", ek_baslik="Location: /panel\r\n" + cerez)
+            else:
+                cevap = _yanit(200, "OK", _giris_html("Parola hatalı.").encode("utf-8"))
+
+        elif yol.startswith("/health"):
             body = _durum_json(kuyruk_size)
             durum_obj = json.loads(body.decode())
             kod = 200 if durum_obj["saglikli"] else 503
-            kod_metin = "OK" if kod == 200 else "Service Unavailable"
-            cevap = (
-                f"HTTP/1.1 {kod} {kod_metin}\r\n"
-                f"Content-Type: application/json; charset=utf-8\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                f"Connection: close\r\n\r\n"
-            ).encode("utf-8") + body
+            cevap = _yanit(kod, "OK" if kod == 200 else "Service Unavailable",
+                           body, tip="application/json")
+
         elif yol.startswith("/panel"):
-            # v22.7 — Sistem 11: Canlı izleme paneli (telefondan tarayıcıyla)
-            html = _panel_html(kuyruk_size).encode("utf-8")
-            cevap = (
-                f"HTTP/1.1 200 OK\r\n"
-                f"Content-Type: text/html; charset=utf-8\r\n"
-                f"Content-Length: {len(html)}\r\n"
-                f"Connection: close\r\n\r\n"
-            ).encode("utf-8") + html
+            # v23.40 — Parola korumalı. PANEL_SIFRE boşsa açık (eski davranış).
+            if not _yetkili_mi(headers):
+                cevap = _yanit(200, "OK", _giris_html().encode("utf-8"))
+            else:
+                cevap = _yanit(200, "OK", _panel_html(kuyruk_size).encode("utf-8"))
+
         elif yol.startswith("/git/"):
-            # v23.24 — Tıklama takibi: ayrı redirect sunucusu YERİNE buraya
-            # eklendi (Railway tek public porta yönlendirir, port çakışması
-            # 'address already in use' hatası bu yüzden çıkıyordu). Kısa
-            # kimliği çöz, tıklamayı kaydet, gerçek (affiliate) URL'ye 302 at.
+            # Tıklama takibi: kısa kimliği çöz, kaydet, affiliate URL'ye 302.
             kid = yol[len("/git/"):].split("?")[0].split("#")[0].strip("/")
             hedef = None
             try:
@@ -285,28 +397,14 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ku
             except Exception:
                 pass
             if hedef:
-                cevap = (
-                    f"HTTP/1.1 302 Found\r\n"
-                    f"Location: {hedef}\r\n"
-                    f"Content-Length: 0\r\n"
-                    f"Connection: close\r\n\r\n"
-                ).encode("utf-8")
+                cevap = _yanit(302, "Found", b"", ek_baslik=f"Location: {hedef}\r\n")
             else:
-                body = b"Link bulunamadi."
-                cevap = (
-                    f"HTTP/1.1 404 Not Found\r\n"
-                    f"Content-Type: text/plain; charset=utf-8\r\n"
-                    f"Content-Length: {len(body)}\r\n"
-                    f"Connection: close\r\n\r\n"
-                ).encode("utf-8") + body
+                cevap = _yanit(404, "Not Found", b"Link bulunamadi.", tip="text/plain")
+
         else:
-            html = b"<h1>FirsatPulsu Bot</h1><p>Calisiyor. <a href='/health'>Health</a> | <a href='/panel'>Panel</a></p>"
-            cevap = (
-                f"HTTP/1.1 200 OK\r\n"
-                f"Content-Type: text/html; charset=utf-8\r\n"
-                f"Content-Length: {len(html)}\r\n"
-                f"Connection: close\r\n\r\n"
-            ).encode("utf-8") + html
+            html = (b"<h1>FirsatPulsu Bot</h1><p>Calisiyor. "
+                    b"<a href='/health'>Health</a> | <a href='/panel'>Panel</a></p>")
+            cevap = _yanit(200, "OK", html)
 
         writer.write(cevap)
         await writer.drain()

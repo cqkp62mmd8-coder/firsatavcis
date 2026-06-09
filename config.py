@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.39-2026.06.01"   # Lisans sistemi: HMAC imzali anahtarlar (lisans_uret.py satici araci + baslangic denetimi, sure/alici destekli). Varsayilan KAPALI (satici/dev); alici LISANS_DENETIMI=1 ile kullanir. Kendi-barindirilanda casdiricidir (durust not modulde)
+SURUM = "v23.40-2026.06.01"   # Web paneli artik PAROLA KORUMALI: giris sayfasi + imzali oturum cerezi (PANEL_SIFRE). /health ve /git/ yollari bozulmadan korundu (yerelde test edildi). PANEL_SIFRE bossa eski davranis (acik)
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
@@ -255,3 +255,7 @@ MAGAZA_IZLEME_URL = [u.strip() for u in _izleme_env.replace("\n", ",").split(","
 # (varsayılan); alıcı LISANS_DENETIMI=1 ve LISANS_ANAHTARI ile kullanır.
 LISANS_ANAHTARI = os.environ.get("LISANS_ANAHTARI", "").strip()
 LISANS_DENETIMI = os.environ.get("LISANS_DENETIMI", "0") in ("1", "true", "True")
+
+# ── Web panel parolası (v23.40) ──────────────────────────────────
+# Boşsa panel herkese açık (eski davranış). Üretimde/satışta MUTLAKA ayarlayın.
+PANEL_SIFRE = os.environ.get("PANEL_SIFRE", "").strip()
