@@ -15,7 +15,7 @@ os.environ.setdefault("KUYRUK_BEKLEME", "180")
 
 import inspect, traceback, importlib
 
-modules = ["test_analiz", "test_sablon", "test_integration", "test_v18", "test_gercek_mesajlar"]
+modules = ["test_analiz", "test_sablon", "test_integration", "test_v18", "test_gercek_mesajlar", "test_cok_kiraci"]
 total = 0
 basari = 0
 hatalar = []

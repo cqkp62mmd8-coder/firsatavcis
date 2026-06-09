@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.41-2026.06.01"   # Dockerfile fix: Railway'in desteklemedigi VOLUME satiri kaldirildi (deploy hatasi). Kalicilik etkilenmez — Railway kendi volume'unu /data'ya baglar, Compose'da adlandirilmis volume kullanilir
+SURUM = "v23.42-2026.06.01"   # SaaS PIVOTU Faz 1: cok_kiraci/ paketi — cok-kiracili musteri/abonelik/ayar/affiliate veri modeli + is mantigi (lisans key, panel-giris dogrulama, abonelik suresi, musteri-basina ayar + tekrar engelleme). 16 test. Mevcut tek-kanalli botu BOZMAZ (eklemeli). SAAS_MIMARI.md eklendi
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
