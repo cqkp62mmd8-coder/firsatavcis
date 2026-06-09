@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.40-2026.06.01"   # Web paneli artik PAROLA KORUMALI: giris sayfasi + imzali oturum cerezi (PANEL_SIFRE). /health ve /git/ yollari bozulmadan korundu (yerelde test edildi). PANEL_SIFRE bossa eski davranis (acik)
+SURUM = "v23.41-2026.06.01"   # Dockerfile fix: Railway'in desteklemedigi VOLUME satiri kaldirildi (deploy hatasi). Kalicilik etkilenmez — Railway kendi volume'unu /data'ya baglar, Compose'da adlandirilmis volume kullanilir
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)
