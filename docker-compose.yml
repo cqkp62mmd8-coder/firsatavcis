@@ -1,0 +1,42 @@
+# FırsatPulsu — Docker Compose
+# Kullanım:
+#   1) cp .env.example .env  (ve düzenle)
+#   2) docker compose up -d
+# SQLite verisi adlandırılmış volume'da kalıcıdır; yeniden başlatmada korunur.
+
+services:
+  bot:
+    build: .
+    image: firsatpulsu:latest
+    container_name: firsatpulsu
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PORT: "8080"
+    volumes:
+      - firsatpulsu_data:/data
+    ports:
+      # Sağlık paneli + tıklama-yönlendirme (/git/) aynı port
+      - "8080:8080"
+
+  # ── İSTEĞE BAĞLI: PostgreSQL ──────────────────────────────────
+  # Bot varsayılan olarak SQLite kullanır (tek örnek için yeterli ve
+  # sıfır yapılandırma). PostgreSQL'e geçiş, DB katmanının ayrı bir
+  # taşıma çalışmasını gerektirir (KAYNAK: bkz. notlar). O taşıma
+  # tamamlanınca aşağıdaki servis etkinleştirilir ve bot'a DATABASE_URL
+  # ortam değişkeni verilir.
+  #
+  # db:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: firsatpulsu
+  #     POSTGRES_USER: firsatpulsu
+  #     POSTGRES_PASSWORD: degistir-beni
+  #   volumes:
+  #     - firsatpulsu_pg:/var/lib/postgresql/data
+
+volumes:
+  firsatpulsu_data:
+  # firsatpulsu_pg:
