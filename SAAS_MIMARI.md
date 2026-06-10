@@ -108,19 +108,27 @@ doğrulama, biçimleme) bu akışta **ortak işleme motoru** olarak yeniden kull
   sayfalar (giriş + panel). Sunucudan-bağımsız mantık, 10 test. **Kalan:** HTTP sunucu
   katmanı — VDS'te FastAPI ya da mevcut hafif sunucuya `/musteri` route'larıyla bağlama
   (canlı test gerektirir).
-- **Faz 5 — Abonelik / ödeme**
-  Plan yönetimi, süre takibi, ödeme entegrasyonu veya elle anahtar verme.
+- **Faz 5 — Abonelik / ödeme (ÇEKİRDEK TAMAMLANDI ✔)**
+  `cok_kiraci/planlar.py` (aylık / 3 aylık / yıllık — süre + operatör-fiyatı),
+  `cok_kiraci/odeme.py` (odemeler tablosu; `odeme_kaydet` → başarılı ödemede aboneliği
+  plan süresince uzatır; ödeme geçmişi; toplam gelir) + `musteri`'de `abonelik_baslat`
+  ve `suresi_dolanlari_askiya_al`. 9 test. **Kalan:** gerçek ödeme sağlayıcı
+  (iyzico / PayTR / Stripe) adaptörü — ağ + hesap gerektirir; sağlayıcının başarı
+  geri-çağrısı `odeme_kaydet`'i tetikler (mantık sağlayıcıdan bağımsız).
 
 ## 7. Mevcut durum
 
-Sürüm v23.45. Faz 1-2-3 ve Faz 4 çekirdeği tamam (`cok_kiraci/`: musteri, depo, havuz,
-sablonlar, affiliate, gonderim, panel — 66 test, toplam 427 test geçiyor). Müşteri →
-panelden ayar → havuzdan eşleştirme → affiliate enjeksiyonu → şablon → gönderim zinciri
-uçtan uca çalışıyor ve test edildi (canlı bot/sunucu olmadan, enjekte edilebilir
-arayüzlerle). Mevcut tek-kanallı bot çalışmaya devam ediyor; çok-kiracılı katman eklemeli.
+Sürüm v23.46. **Beş fazın da test edilebilir çekirdeği tamam** (`cok_kiraci/`: musteri,
+depo, havuz, sablonlar, affiliate, gonderim, panel, planlar, odeme — 75 test, toplam
+436 test geçiyor). Uçtan uca zincir çalışıyor ve test edildi: müşteri oluştur/lisans →
+panelden ayar → havuzdan eşleştirme → affiliate enjeksiyonu → şablon → gönderim →
+abonelik/ödeme ile süre uzatma. Hepsi canlı bot/sunucu/sağlayıcı olmadan, enjekte
+edilebilir arayüzlerle doğrulandı. Mevcut tek-kanallı bot çalışmaya devam ediyor.
 
-Kalan canlı/dış-bağımlı parçalar: (a) **veri kaynağı kararı** → kaynak toplama
-adaptörü (öneri: Amazon Creators API belkemiği), (b) panelin HTTP sunucu katmanı
-(VDS'te FastAPI ya da hafif sunucu), (c) canlı bot göndericisi (bot token), (d) Faz 5
-abonelik/ödeme. Bunların hepsi VDS + bot token + Amazon erişimi gerektirdiği için
-canlı ortamda yazılıp test edilecek.
+**Geriye kalan tamamen canlı/dış-bağımlı entegrasyon katmanı** (VDS + dış hesaplar +
+canlı test gerektirir, bu yüzden bilerek ertelendi):
+1. Veri kaynağı adaptörü — öneri Amazon Creators API (gerekirse @kacirmabak'la aç).
+2. Panelin HTTP sunucu katmanı — VDS'te FastAPI ya da mevcut hafif sunucu.
+3. Canlı bot göndericisi — tek platform botu (bot token).
+4. Gerçek ödeme sağlayıcı adaptörü — iyzico / PayTR / Stripe.
+5. VDS kurulumu — Docker Compose + ters vekil (Caddy) + HTTPS + PostgreSQL'e taşıma.

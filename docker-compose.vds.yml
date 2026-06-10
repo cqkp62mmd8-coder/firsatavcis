@@ -1,0 +1,62 @@
+# FırsatPulsu — VDS (üretim) Docker Compose
+# bot + Caddy (otomatik HTTPS ters vekil). PostgreSQL isteğe bağlı (yorumda).
+#
+# Kullanım (VDS'te, repo dizininde):
+#   1) cp .env.example .env   →  ALAN_ADI ve bot değişkenlerini düzenle
+#   2) docker compose -f docker-compose.vds.yml up -d --build
+#
+# Caddy 80/443'ü açar ve HTTPS'i otomatik yönetir; bot portu host'a AÇILMAZ
+# (Caddy iç Docker ağından erişir). SQLite verisi adlandırılmış volume'da kalıcı.
+
+services:
+  bot:
+    build: .
+    image: firsatpulsu:latest
+    container_name: firsatpulsu
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PORT: "8080"
+    volumes:
+      - firsatpulsu_data:/data
+    expose:
+      - "8080"          # yalnız iç ağ; host'a yayınlanmaz
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: firsatpulsu_caddy
+    restart: unless-stopped
+    depends_on:
+      - bot
+    environment:
+      ALAN_ADI: ${ALAN_ADI}
+      CADDY_EMAIL: ${CADDY_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # ── İSTEĞE BAĞLI: PostgreSQL (SQLite→Postgres taşıması sonrası) ──
+  # Bkz. POSTGRES_GECIS.md. Taşıma tamamlanınca bu servisi aç ve bot'a
+  # DATABASE_URL ver (env_file/.env içinde).
+  #
+  # db:
+  #   image: postgres:16-alpine
+  #   container_name: firsatpulsu_db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: firsatpulsu
+  #     POSTGRES_USER: firsatpulsu
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #   volumes:
+  #     - firsatpulsu_pg:/var/lib/postgresql/data
+
+volumes:
+  firsatpulsu_data:
+  caddy_data:
+  caddy_config:
+  # firsatpulsu_pg:

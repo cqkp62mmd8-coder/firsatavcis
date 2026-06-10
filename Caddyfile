@@ -1,0 +1,17 @@
+# Caddyfile — FırsatPulsu ters vekil + OTOMATİK HTTPS
+#
+# Caddy, alan adın için Let's Encrypt sertifikasını otomatik alır ve yeniler.
+# Alan adı ve e-posta docker-compose.vds.yml üzerinden (.env'den) gelir.
+#
+# Tek yaptığı: https://ALAN_ADIN → bot konteynerinin 8080 portuna yönlendirmek.
+# Böylece /health, /panel, /git/ (tıklama yönlendirmesi) HTTPS üzerinden çalışır.
+
+{
+	# Sertifika bildirimleri için e-posta (boş bırakılabilir)
+	email {$CADDY_EMAIL}
+}
+
+{$ALAN_ADI} {
+	encode gzip
+	reverse_proxy bot:8080
+}

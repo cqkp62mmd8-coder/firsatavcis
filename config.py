@@ -40,7 +40,7 @@ def _bool_env(anahtar: str, varsayilan: bool = False) -> bool:
 # ── Sürüm damgası (deploy doğrulama) ─────────────────────────────
 # Bu sayıyı her önemli düzeltmede artır. Bot başlarken loglar.
 # Railway logunda bu numarayı görmüyorsan → eski kod çalışıyor demektir.
-SURUM = "v23.45-2026.06.01"   # SaaS Faz 4 cekirdek: cok_kiraci/panel.py — musteri web paneli (lisansla giris + imzali oturum cerezi + ayar formu: kanal/yayin/min indirim/kategoriler/sablon/affiliate + marka renkli sayfalar). Sunucudan-bagimsiz mantik, 10 test. HTTP sunucu katmani (FastAPI/hafif) canli. Veri kaynagi: PA-API kapandi -> Amazon Creators API onerisi
+SURUM = "v23.47-2026.06.01"   # VDS kurulum paketi: VDS_KURULUM.md (adim adim Ubuntu+Docker+Caddy rehberi) + Caddyfile (otomatik HTTPS ters vekil) + docker-compose.vds.yml (bot+Caddy uretim) + POSTGRES_GECIS.md (SQLite->Postgres plani) + .env.example ALAN_ADI/CADDY_EMAIL. Kod degismedi, 436 test
 
 # ── Telegram kimlik bilgileri ────────────────────────────────────
 API_ID         = _int_env("API_ID", 0)

@@ -63,6 +63,16 @@ CREATE TABLE IF NOT EXISTS firsatlar (
 );
 CREATE INDEX IF NOT EXISTS idx_firsat_indirim ON firsatlar (indirim);
 CREATE INDEX IF NOT EXISTS idx_firsat_kategori ON firsatlar (kategori);
+CREATE TABLE IF NOT EXISTS odemeler (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    musteri_id  INTEGER NOT NULL,
+    plan        TEXT,
+    tutar       REAL DEFAULT 0,
+    referans    TEXT DEFAULT '',          -- sağlayıcı işlem kimliği / açıklama
+    durum       TEXT DEFAULT 'basarili',  -- basarili / basarisiz / iptal
+    olusturma   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_odeme_musteri ON odemeler (musteri_id);
 """
 
 

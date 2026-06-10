@@ -509,3 +509,90 @@ class TestPanelSayfa:
         assert "amztag-21" in h                 # mevcut affiliate etiketi
         assert "aff_amazon" in h and "aff_trendyol" in h
         assert "minimal" in h                   # şablon seçeneği
+
+
+# ════════════════════════════════════════════════════════════════
+# Faz 5 — Planlar + abonelik yaşam döngüsü + ödeme
+# ════════════════════════════════════════════════════════════════
+def _temiz_odeme():
+    musteri, depo = _temiz()
+    from cok_kiraci import planlar, odeme
+    importlib.reload(planlar)
+    importlib.reload(odeme)
+    return musteri, depo, planlar, odeme
+
+
+class TestPlanlar:
+    def test_plan_getir(self):
+        *_, planlar, _ = _temiz_odeme()
+        assert planlar.plan_getir("aylik")["gun"] == 30
+        assert planlar.plan_getir("yillik")["gun"] == 365
+        assert planlar.plan_getir("yok") is None
+
+    def test_gecerli_plan(self):
+        *_, planlar, _ = _temiz_odeme()
+        assert planlar.gecerli_plan("uc_aylik") is True
+        assert planlar.gecerli_plan("xx") is False
+
+    def test_plan_listesi(self):
+        *_, planlar, _ = _temiz_odeme()
+        assert {p["id"] for p in planlar.plan_listesi()} == {"aylik", "uc_aylik", "yillik"}
+
+
+class TestAbonelikYasamDongusu2:
+    def test_abonelik_baslat_plan_ve_sure(self):
+        musteri, depo, planlar, odeme = _temiz_odeme()
+        from utils.log import simdi_tr
+        from datetime import datetime
+        m = musteri.musteri_olustur(gun=10)
+        yeni = musteri.abonelik_baslat(m["id"], "yillik")
+        kalan = (datetime.fromisoformat(yeni) - simdi_tr()).days
+        assert 373 <= kalan <= 376                       # 10 + 365 (kalanın üzerine ekler)
+        assert depo.musteri_getir(m["id"])["plan"] == "yillik"
+
+    def test_gecersiz_plan_baslatilmaz(self):
+        musteri, depo, planlar, odeme = _temiz_odeme()
+        assert musteri.abonelik_baslat(musteri.musteri_olustur()["id"], "yok") is None
+
+    def test_suresi_dolanlari_askiya_al(self):
+        musteri, depo, planlar, odeme = _temiz_odeme()
+        from utils.log import simdi_tr
+        from datetime import timedelta
+        aktif = musteri.musteri_olustur(gun=30)
+        dolmus = musteri.musteri_olustur(gun=30)
+        depo.musteri_guncelle(dolmus["id"], bitis=(simdi_tr() - timedelta(days=1)).isoformat())
+        assert musteri.suresi_dolanlari_askiya_al() == 1
+        assert depo.musteri_getir(dolmus["id"])["durum"] == "pasif"
+        assert depo.musteri_getir(aktif["id"])["durum"] == "aktif"
+
+
+class TestOdeme:
+    def test_basarili_odeme_uzatir_ve_kaydeder(self):
+        musteri, depo, planlar, odeme = _temiz_odeme()
+        from utils.log import simdi_tr
+        from datetime import datetime
+        m = musteri.musteri_olustur(gun=5)
+        yeni = odeme.odeme_kaydet(m["id"], "aylik", 99.0, referans="TX1")
+        assert yeni is not None
+        kalan = (datetime.fromisoformat(yeni) - simdi_tr()).days
+        assert 33 <= kalan <= 36                          # 5 + 30
+        gec = odeme.odeme_gecmisi(m["id"])
+        assert len(gec) == 1 and gec[0]["tutar"] == 99.0 and gec[0]["plan"] == "aylik"
+        assert odeme.toplam_gelir() == 99.0
+        assert depo.musteri_getir(m["id"])["plan"] == "aylik"
+
+    def test_basarisiz_odeme_uzatmaz_ama_kaydeder(self):
+        musteri, depo, planlar, odeme = _temiz_odeme()
+        m = musteri.musteri_olustur(gun=5)
+        once = depo.musteri_getir(m["id"])["bitis"]
+        assert odeme.odeme_kaydet(m["id"], "aylik", 99.0, durum="basarisiz") is None
+        assert depo.musteri_getir(m["id"])["bitis"] == once       # uzatılmadı
+        assert len(odeme.odeme_gecmisi(m["id"])) == 1             # ama kayıt var
+        assert odeme.toplam_gelir() == 0                          # gelire sayılmaz
+
+    def test_gecersiz_plan_uzatmaz(self):
+        musteri, depo, planlar, odeme = _temiz_odeme()
+        m = musteri.musteri_olustur(gun=5)
+        once = depo.musteri_getir(m["id"])["bitis"]
+        assert odeme.odeme_kaydet(m["id"], "yokboyle", 50.0) is None
+        assert depo.musteri_getir(m["id"])["bitis"] == once

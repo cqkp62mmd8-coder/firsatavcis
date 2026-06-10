@@ -89,6 +89,29 @@ def askiya_al(musteri_id: int) -> None:
     depo.musteri_guncelle(musteri_id, durum="pasif")
 
 
+def abonelik_baslat(musteri_id: int, plan_id: str):
+    """Müşteriyi bir plana al: planı kaydet, süreyi planın günü kadar uzat, aktif et.
+    Yeni bitiş tarihini döndürür; plan geçersizse None."""
+    from cok_kiraci import planlar
+    p = planlar.plan_getir(plan_id)
+    if not p:
+        return None
+    depo.musteri_guncelle(musteri_id, plan=plan_id)
+    return abonelik_uzat(musteri_id, p["gun"])
+
+
+def suresi_dolanlari_askiya_al() -> int:
+    """Süresi geçmiş aktif müşterileri pasifle; etkilenen sayıyı döndür.
+    (Gönderim zaten aktif_mi kontrol eder; bu, durumu temiz tutar ve panelde
+    'süreniz doldu' gösterimini netleştirir. Periyodik çağrılmak için.)"""
+    n = 0
+    for m in depo.musteri_listele(sadece_aktif=True):
+        if _suresi_doldu(m):
+            depo.musteri_guncelle(m["id"], durum="pasif")
+            n += 1
+    return n
+
+
 # ── ayar (panelden düzenlenir) ────────────────────────────────────
 def ayar_getir(musteri_id: int) -> dict:
     """Müşteri ayarlarını normalize edilmiş biçimde döndür."""
